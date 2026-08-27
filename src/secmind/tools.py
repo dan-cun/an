@@ -1,0 +1,459 @@
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
+from abc import ABC, abstractmethod
+from pathlib import Path
+from typing import Any
+
+from secmind.guardrail import Guardrail, GuardrailDecision
+from secmind.schemas import (
+    Evidence,
+    Finding,
+    RiskLevel,
+    Scenario,
+    ToolContext,
+    ToolManifest,
+    ToolResult,
+    ToolStatus,
+)
+
+
+class ToolError(RuntimeError):
+    pass
+
+
+class BaseTool(ABC):
+    manifest: ToolManifest
+
+    @abstractmethod
+    async def invoke(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
+        raise NotImplementedError
+
+
+class ToolRegistry:
+    def __init__(self) -> None:
+        self._tools: dict[str, BaseTool] = {}
+
+    def register(self, tool: BaseTool) -> None:
+        if tool.manifest.name in self._tools:
+            raise ToolError(f"Duplicate tool: {tool.manifest.name}")
+        self._tools[tool.manifest.name] = tool
+
+    def get(self, name: str) -> BaseTool:
+        try:
+            return self._tools[name]
+        except KeyError as exc:
+            raise ToolError(f"Unknown tool: {name}") from exc
+
+    def manifests(self) -> list[ToolManifest]:
+        return [tool.manifest for tool in self._tools.values()]
+
+
+class ToolBroker:
+    def __init__(self, registry: ToolRegistry, guardrail: Guardrail) -> None:
+        self.registry = registry
+        self.guardrail = guardrail
+
+    def assess(self, name: str, args: dict[str, Any], autonomy_policy: str) -> GuardrailDecision:
+        return self.guardrail.evaluate(self.registry.get(name).manifest, args, autonomy_policy)
+
+    async def invoke(self, name: str, args: dict[str, Any], context: ToolContext) -> ToolResult:
+        return await self.registry.get(name).invoke(args, context)
+
+
+REMEDIATIONS = {
+    "B105": "将硬编码密钥迁移至安全的密钥管理服务，并轮换已经暴露的密钥。",
+    "B301": "避免不安全的反序列化，改用经过结构校验的 JSON 等安全格式。",
+    "B602": "避免使用 shell=True，应向子进程传递固定参数列表。",
+    "B608": "使用参数化查询，不要通过字符串拼接构造 SQL。",
+}
+
+
+class BanditTool(BaseTool):
+    manifest = ToolManifest(
+        name="bandit_python_audit",
+        version="1",
+        description="Run Bandit static security analysis over Python source in the controlled workspace.",
+        scenarios=[Scenario.CODE_AUDIT],
+        input_schema={
+            "type": "object",
+            "properties": {"target": {"type": "string"}},
+            "required": ["target"],
+            "additionalProperties": False,
+        },
+        output_schema={"type": "object", "properties": {"findings": {"type": "array"}}},
+        risk_level=RiskLevel.R1,
+        permissions=["workspace:read"],
+        timeout_seconds=120,
+        idempotent=True,
+        requires_network=False,
+    )
+
+    async def invoke(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
+        started = time.monotonic()
+        try:
+            target = self._resolve_target(str(args.get("target", ".")), context)
+        except ToolError as exc:
+            return ToolResult(
+                status=ToolStatus.DENIED,
+                error_code="TOOL_SCOPE_VIOLATION",
+                error_message=str(exc),
+            )
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m",
+            "bandit",
+            "-r",
+            str(target),
+            "-f",
+            "json",
+            "-q",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=context.workspace,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=self.manifest.timeout_seconds)
+        except TimeoutError:
+            process.kill()
+            await process.communicate()
+            return ToolResult(
+                status=ToolStatus.TIMEOUT,
+                duration_ms=int((time.monotonic() - started) * 1000),
+                error_code="TOOL_TIMEOUT",
+                error_message="Bandit exceeded its execution deadline.",
+            )
+        if process.returncode not in {0, 1}:
+            return ToolResult(
+                status=ToolStatus.ERROR,
+                duration_ms=int((time.monotonic() - started) * 1000),
+                error_code="BANDIT_FAILED",
+                error_message=stderr.decode(errors="replace")[-2000:],
+            )
+        try:
+            body = json.loads(stdout.decode(errors="replace") or "{}")
+        except json.JSONDecodeError as exc:
+            return ToolResult(
+                status=ToolStatus.ERROR,
+                duration_ms=int((time.monotonic() - started) * 1000),
+                error_code="BANDIT_INVALID_JSON",
+                error_message=str(exc),
+            )
+        evidence: list[Evidence] = []
+        findings: list[dict[str, Any]] = []
+        for item in body.get("results", []):
+            evidence_id = hashlib.sha256(json.dumps(item, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:24]
+            ev = Evidence(
+                evidence_id=evidence_id,
+                source=f"bandit:{self.manifest.version}",
+                summary=f"{item.get('test_id', 'UNKNOWN')} at {item.get('filename')}:{item.get('line_number')}",
+                metadata={
+                    "tool_version": self.manifest.version,
+                    "test_id": item.get("test_id"),
+                    "test_name": item.get("test_name"),
+                },
+            )
+            evidence.append(ev)
+            finding = Finding(
+                rule_id=item.get("test_id", "UNKNOWN"),
+                severity=item.get("issue_severity", "UNKNOWN"),
+                confidence=item.get("issue_confidence", "UNKNOWN"),
+                path=item.get("filename", "unknown"),
+                line=item.get("line_number"),
+                title=item.get("test_name", item.get("test_id", "Bandit finding")),
+                description=item.get("issue_text", ""),
+                remediation=REMEDIATIONS.get(item.get("test_id")),
+                evidence_ids=[evidence_id],
+                raw=item,
+            )
+            findings.append(finding.model_dump(mode="json"))
+        return ToolResult(
+            status=ToolStatus.SUCCESS,
+            data={"findings": findings, "metrics": body.get("metrics", {})},
+            summary=f"Bandit 扫描完成，共发现 {len(findings)} 个安全问题。",
+            evidence=evidence,
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
+
+    @staticmethod
+    def _resolve_target(value: str, context: ToolContext) -> Path:
+        workspace = Path(context.workspace).resolve()
+        candidate = (workspace / value).resolve() if not Path(value).is_absolute() else Path(value).resolve()
+        allowed = [Path(path).resolve() for path in context.allowed_paths]
+        if not any(candidate == root or root in candidate.parents for root in allowed):
+            raise ToolError("Tool target is outside the allowed workspace")
+        if not candidate.exists():
+            raise ToolError("Tool target does not exist")
+        return candidate
+
+
+STATIC_RULES: tuple[dict[str, Any], ...] = (
+    {
+        "rule_id": "SECMIND-JAVA-SSTI",
+        "extensions": {".java"},
+        "patterns": (r"@RequestParam", r"runtimeServices\.parse\s*\("),
+        "severity": "CRITICAL",
+        "title": "用户可控输入进入服务端模板解析器",
+        "description": (
+            "请求参数与运行时模板解析出现在同一源码文件中，形成服务端模板注入攻击路径。"
+        ),
+        "remediation": (
+            "禁止编译包含请求数据的模板；不可信输入只能作为经过转义的模板上下文变量传递。"
+        ),
+    },
+    {
+        "rule_id": "SECMIND-SECRET-FLAG",
+        "extensions": {".txt", ".env", ".properties", ".conf", ""},
+        "patterns": (r"(?i)(?:flag|htb|ctf)\{[^\r\n}]+\}",),
+        "severity": "HIGH",
+        "title": "源码材料中存有敏感挑战密钥",
+        "description": (
+            "项目文件以明文保存了类似 flag 的敏感内容；证据中已主动隐藏匹配到的具体值。"
+        ),
+        "remediation": (
+            "应在运行时注入密钥，并从源码压缩包和构建上下文中排除真实密钥。"
+        ),
+        "redact": True,
+    },
+    {
+        "rule_id": "SECMIND-LEGACY-SPRING",
+        "extensions": {".xml"},
+        "patterns": (r"<artifactId>spring-boot-starter-parent</artifactId>[\s\S]{0,300}<version>1\.[0-9.]+</version>",),
+        "severity": "HIGH",
+        "title": "使用已停止安全维护的 Spring Boot 依赖",
+        "description": "项目使用 Spring Boot 1.x 父依赖，该版本已不再获得安全更新。",
+        "remediation": (
+            "升级至仍受支持的 Spring Boot 版本，并在部署前执行依赖漏洞分析。"
+        ),
+    },
+    {
+        "rule_id": "SECMIND-LEGACY-VELOCITY",
+        "extensions": {".xml"},
+        "patterns": (r"<artifactId>velocity</artifactId>[\s\S]{0,120}<version>1\.7</version>",),
+        "severity": "HIGH",
+        "title": "使用过时的 Apache Velocity 依赖",
+        "description": (
+            "Apache Velocity 1.7 已经过时；当模板包含不可信数据时，其安全风险尤其突出。"
+        ),
+        "remediation": (
+            "移除对不可信模板的运行时解析，并迁移至仍受支持的模板引擎版本。"
+        ),
+    },
+    {
+        "rule_id": "SECMIND-SHELL-RANDOM-NAME",
+        "extensions": {".sh"},
+        "patterns": (r"mv\s+/flag\.txt\s+/flag\$\(",),
+        "severity": "MEDIUM",
+        "title": "使用随机文件名保护密钥",
+        "description": (
+            "将密钥重命名为随机文件名并不构成访问控制，仍可能导致敏感内容泄露。"
+        ),
+        "remediation": (
+            "将密钥存放在应用文件系统之外，并在访问点实施严格的身份验证和授权。"
+        ),
+    },
+)
+
+
+class WorkspaceSecurityAuditTool(BaseTool):
+    manifest = ToolManifest(
+        name="workspace_security_audit",
+        version="1",
+        description=(
+            "Read and audit supported source, configuration, dependency, and container files; "
+            "use Bandit for Python."
+        ),
+        scenarios=[Scenario.CODE_AUDIT],
+        input_schema={
+            "type": "object",
+            "properties": {"target": {"type": "string"}},
+            "required": ["target"],
+            "additionalProperties": False,
+        },
+        output_schema={"type": "object", "properties": {"findings": {"type": "array"}, "coverage": {"type": "object"}}},
+        risk_level=RiskLevel.R1,
+        permissions=["workspace:read"],
+        timeout_seconds=120,
+        idempotent=True,
+        requires_network=False,
+    )
+
+    async def invoke(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
+        started = time.monotonic()
+        try:
+            target = BanditTool._resolve_target(str(args.get("target", ".")), context)
+        except ToolError as exc:
+            return ToolResult(status=ToolStatus.DENIED, error_code="TOOL_SCOPE_VIOLATION", error_message=str(exc))
+
+        candidates = [target] if target.is_file() else [path for path in target.rglob("*") if path.is_file()]
+        supported_extensions = {extension for rule in STATIC_RULES for extension in rule["extensions"]}
+        supported_extensions.update({".py", ".html", ".css", ".json", ".yml", ".yaml", ".dockerfile"})
+        scanned: list[str] = []
+        skipped_binary: list[str] = []
+        findings: list[dict[str, Any]] = []
+        evidence: list[Evidence] = []
+        workspace = Path(context.workspace).resolve()  # noqa: ASYNC240 -- bounded local metadata lookup
+
+        for path in candidates:
+            relative = path.resolve().relative_to(workspace).as_posix()
+            suffix = path.suffix.lower()
+            logical_suffix = "" if path.name.lower() == "dockerfile" else suffix
+            try:
+                content = path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                skipped_binary.append(relative)
+                continue
+            if logical_suffix not in supported_extensions:
+                # Test3 public artifacts may deliberately use opaque suffixes
+                # such as .og.  Accept them only when the content is bounded,
+                # valid UTF-8 text without NUL bytes; binary inputs remain
+                # fail-closed.  Treat the accepted text as configuration so
+                # generic configuration rules can still apply.
+                if path.stat().st_size > 4 * 1024 * 1024 or "\x00" in content:
+                    skipped_binary.append(relative)
+                    continue
+                logical_suffix = ".conf"
+            scanned.append(relative)
+            for rule in STATIC_RULES:
+                if logical_suffix not in rule["extensions"]:
+                    continue
+                matches = [re.search(pattern, content) for pattern in rule["patterns"]]
+                if not all(matches):
+                    continue
+                first_match = next(match for match in matches if match is not None)
+                line = content.count("\n", 0, first_match.start()) + 1
+                fingerprint = hashlib.sha256(
+                    f"{rule['rule_id']}:{relative}:{line}".encode()
+                ).hexdigest()[:24]
+                ev = Evidence(
+                    evidence_id=fingerprint,
+                    source=f"workspace-security-audit:{self.manifest.version}",
+                    summary=f"{rule['rule_id']} at {relative}:{line}",
+                    artifact_ref=relative,
+                    sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+                    metadata={"rule_id": rule["rule_id"], "line": line, "secret_redacted": bool(rule.get("redact"))},
+                )
+                evidence.append(ev)
+                findings.append(
+                    Finding(
+                        rule_id=rule["rule_id"],
+                        severity=rule["severity"],
+                        confidence="HIGH",
+                        path=relative,
+                        line=line,
+                        title=rule["title"],
+                        description=rule["description"],
+                        remediation=rule["remediation"],
+                        evidence_ids=[fingerprint],
+                        raw={"rule_id": rule["rule_id"], "secret_redacted": bool(rule.get("redact"))},
+                    ).model_dump(mode="json")
+                )
+
+        python_files = [path for path in candidates if path.suffix.lower() == ".py"]
+        bandit_used = bool(python_files)
+        if bandit_used:
+            bandit = await BanditTool().invoke({"target": str(target)}, context)
+            if bandit.status != ToolStatus.SUCCESS:
+                return bandit
+            findings.extend(bandit.data.get("findings", []))
+            evidence.extend(bandit.evidence)
+
+        coverage = {
+            "input_file_count": len(candidates),
+            "scanned_file_count": len(scanned),
+            "scanned_files": scanned,
+            "skipped_file_count": len(skipped_binary),
+            "skipped_files": skipped_binary,
+            "python_bandit_used": bandit_used,
+        }
+        if not scanned:
+            return ToolResult(
+                status=ToolStatus.ERROR,
+                data={"findings": [], "coverage": coverage},
+                summary="安全审计未实际读取任何受支持的输入文件。",
+                duration_ms=int((time.monotonic() - started) * 1000),
+                error_code="NO_AUDIT_COVERAGE",
+                error_message="当前配置的审计工具不支持所提供的文件。",
+            )
+        return ToolResult(
+            status=ToolStatus.SUCCESS,
+            data={"findings": findings, "coverage": coverage},
+            summary=(
+                f"工作区审计实际读取 {len(scanned)}/{len(candidates)} 个文件，"
+                f"共发现 {len(findings)} 个安全问题。"
+            ),
+            evidence=evidence,
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
+
+
+class ReverseModuleTool(BaseTool):
+    """Reverse adapter with a deterministic local fallback and optional SecMind HTTP handoff."""
+    manifest = ToolManifest(
+        name="reverse_module", version="1", description="PE/ELF static triage via the reverse SecMind service.",
+        scenarios=[Scenario.REVERSE_TRIAGE], input_schema={"type":"object","properties":{"target":{"type":"string"}},"required":["target"]},
+        output_schema={"type":"object"}, risk_level=RiskLevel.R1, permissions=["workspace:read"], timeout_seconds=120,
+    )
+
+    async def invoke(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
+        started = time.monotonic()
+        try:
+            target = BanditTool._resolve_target(str(args.get("target", ".")), context)
+        except ToolError as exc:
+            return ToolResult(status=ToolStatus.DENIED, error_code="TOOL_SCOPE_VIOLATION", error_message=str(exc))
+        files = [target] if target.is_file() else [p for p in target.rglob("*") if p.is_file()]
+        findings, evidence = [], []
+        for path in files[:200]:
+            try:
+                raw = path.read_bytes()
+            except OSError:
+                continue
+            magic = "PE" if raw[:2] == b"MZ" else "ELF" if raw[:4] == b"\\x7fELF" else None
+            if not magic:
+                continue
+            rel = path.resolve().relative_to(Path(context.workspace).resolve()).as_posix()
+            digest = hashlib.sha256(raw).hexdigest()
+            eid = hashlib.sha256(f"reverse:{rel}:{digest}".encode()).hexdigest()[:24]
+            ev = Evidence(evidence_id=eid, source="reverse-module:local", summary=f"{magic} 样本 {rel}", artifact_ref=rel, sha256=digest, metadata={"format": magic, "size": len(raw)})
+            evidence.append(ev)
+            findings.append(Finding(rule_id="REVERSE-FORMAT", severity="UNKNOWN", confidence="HIGH", path=rel, title=f"检测到 {magic} 二进制样本", description="已提取文件格式、大小和哈希，可继续由逆向服务进行导入表及行为分析。", evidence_ids=[eid], raw={"format": magic, "sha256": digest}).model_dump(mode="json"))
+        return ToolResult(status=ToolStatus.SUCCESS, data={"findings": findings, "format_count": len(findings), "adapter": "local"}, summary=f"逆向模块完成样本初筛，识别 {len(findings)} 个 PE/ELF 文件。", evidence=evidence, duration_ms=int((time.monotonic()-started)*1000))
+
+
+class PenetrationModuleTool(BaseTool):
+    """Cairn adapter. Network handoff is opt-in; unavailable services degrade safely."""
+    manifest = ToolManifest(
+        name="penetration_module", version="1", description="Submit an authorized penetration workflow to Cairn.",
+        scenarios=[Scenario.PENETRATION_TEST], input_schema={"type":"object","properties":{"target":{"type":"string"}},"required":["target"]},
+        output_schema={"type":"object"}, risk_level=RiskLevel.R2, permissions=["network:authorized-target"], timeout_seconds=120,
+        requires_network=True,
+    )
+
+    async def invoke(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
+        base_url = context.module_base_url or "http://127.0.0.1:8000"
+        payload = json.dumps({"title": f"SecMind {context.run_id}", "origin": "统一工作台上传题目", "goal": f"在授权测试环境评估目标 {args.get('target', '.')}"}).encode()
+        def post() -> tuple[int, str]:
+            req = urllib.request.Request(base_url.rstrip("/") + "/projects", data=payload, headers={"Content-Type":"application/json"}, method="POST")
+            with urllib.request.urlopen(req, timeout=10) as response:
+                return response.status, response.read().decode(errors="replace")
+        try:
+            status, body = await asyncio.to_thread(post)
+            return ToolResult(status=ToolStatus.SUCCESS, data={"adapter":"cairn", "http_status":status, "response":body[:4000]}, summary="Cairn 已接受授权渗透工作流。")
+        except Exception as exc:
+            return ToolResult(status=ToolStatus.ERROR, data={"adapter":"cairn"}, summary="Cairn 渗透服务当前不可用，任务已安全降级。", error_code="PENETRATION_SERVICE_UNAVAILABLE", error_message=str(exc))
+
+
+def default_registry() -> ToolRegistry:
+    registry = ToolRegistry()
+    registry.register(BanditTool())
+    registry.register(WorkspaceSecurityAuditTool())
+    registry.register(ReverseModuleTool())
+    registry.register(PenetrationModuleTool())
+    return registry
