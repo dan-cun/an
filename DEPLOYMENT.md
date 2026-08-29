@@ -20,7 +20,7 @@
 准备：Windows PowerShell、Python 3.11–3.13、`uv`、Node.js 20+。
 
 ```powershell
-Set-Location C:\kaifa\tool\my-competition-secmind-baseline-f606c48
+Set-Location C:\path\to\security-agent
 
 # 第一次运行时同步 Python 依赖并创建 data 目录
 uv sync --all-extras
@@ -35,7 +35,7 @@ uv run security-agent-api
 另开一个 PowerShell 窗口启动前端：
 
 ```powershell
-Set-Location C:\kaifa\tool\my-competition-secmind-baseline-f606c48\frontend
+Set-Location C:\path\to\security-agent\frontend
 npm ci
 npm run dev
 ```
@@ -102,7 +102,7 @@ $env:SECURITY_AGENT_FALLBACK_MODEL = "实际可用的模型ID"
 准备 Docker Desktop（启用 Linux containers）：
 
 ```powershell
-Set-Location C:\kaifa\tool\my-competition-secmind-baseline-f606c48
+Set-Location C:\path\to\security-agent
 Copy-Item .env.example .env
 
 # 可选：修改 .env 中的 POSTGRES_PASSWORD 和模型变量
@@ -138,7 +138,7 @@ docker compose logs -f frontend
 ## 6. 发布前检查
 
 ```powershell
-Set-Location C:\kaifa\tool\my-competition-secmind-baseline-f606c48
+Set-Location C:\path\to\security-agent
 uv run pytest -q
 uv run ruff check src
 Set-Location frontend

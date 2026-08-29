@@ -20,7 +20,7 @@
 迁移代码需要重启已经运行的 baseline 进程才能生效。先在运行该进程的 PowerShell 窗口按 `Ctrl+C`，再执行：
 
 ```powershell
-cd C:\kaifa\tool\my-competition-secmind-baseline-f606c48
+cd C:\path\to\security-agent
 $env:SECURITY_AGENT_API_PORT="8001"
 uv run security-agent-api
 ```
