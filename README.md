@@ -28,8 +28,9 @@
 - `Cairn-worker-full` 的独立实现通过 `SECURITY_AGENT_PENETRATION_BASE_URL` 接入，目标仓库的
   `codex/cairn-worker-full` 分支保存对应外部运行时改动。
 
-不会提交 `.env`、真实 API Key、`data/`、SQLite 数据库、Python `.venv/` 或前端
-`node_modules/`。这些目录由下面的命令自动创建。
+`.env`、真实 API Key、`data/`、SQLite 数据库和 Python `.venv/` 不会提交。本分支按交付要求
+包含当前 `frontend/node_modules/` 依赖快照（约 167 MB）；其他环境仍建议执行 `npm ci` 重新生成，
+以便获得与 `package-lock.json` 一致的依赖。
 
 ## Test3.0 单题评测闭环
 
