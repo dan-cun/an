@@ -45,6 +45,13 @@ const SAFE_SERVER_IDS = new Set([
   'local-web-security',
   'local-security-extended',
 ])
+const SERVER_ICON_NAMES = {
+  'local-semgrep': 'code',
+  'local-cyberchef': 'experiment',
+  'local-wiremcp': 'wifi',
+  'local-web-security': 'safety',
+  'local-security-extended': 'security-scan',
+}
 
 const ICONS = {
   apartment: ApartmentOutlined,
@@ -101,6 +108,6 @@ export function McpRegistryPage() {
   return <div className="catalog-page">
     <section className="page-intro catalog-hero"><div><Text className="panel-kicker">MCP REGISTRY / SAFE IMPORT</Text><Title level={2}>MCP 工具清单</Title><p>按工具作用、输入、返回和调用时机整理可接入能力。当前只展示登记信息，不建立 MCP 连接。</p></div><div className="intro-tags"><Tag><LockOutlined /> 调用已禁用</Tag><Button type="text" icon={<ReloadOutlined />} onClick={load}>刷新</Button></div></section>
     <section className="catalog-metrics"><div className="catalog-metric"><CatalogIcon name="tool" /><Statistic title="安全 Server" value={data ? displayServers.length : 0} /></div><div className="catalog-metric is-green"><SafetyCertificateOutlined /><Statistic title="可展示工具" value={displayToolCount} /></div><div className="catalog-metric is-gold"><LockOutlined /><Statistic title="模型状态" value="正在调用" /></div></section>
-    <section className="glass-panel catalog-library"><header className="panel-heading"><div><Text className="panel-kicker">REGISTERED SERVERS</Text><Title level={4}>工具能力矩阵</Title></div><Tag color="gold">runtime disabled</Tag></header><div className="mcp-grid">{loading ? <Skeleton active paragraph={{ rows: 12 }} /> : displayServers.length ? displayServers.map((server) => <article className={`mcp-card ${server.candidate ? 'is-candidate' : ''}`} key={server.server_id}><header><div className="mcp-title"><CatalogIcon name={server.icon} /><span><b>{server.name}</b><small>{server.server_id} · {server.tool_count ?? server.tools?.length ?? 0} 个安全工具</small></span></div><Tag color="green"><SafetyCertificateOutlined /> 安全 Server</Tag></header><p className="mcp-server-purpose">{server.purpose}</p><div className="mcp-tool-list">{(server.tools || []).map((tool) => <details className="mcp-tool" key={tool.tool_id}><summary><span><CatalogIcon name={tool.icon} /> {tool.display_name || tool.name}</span><small>{tool.name} · {tool.risk_level} · 运行时未暴露</small></summary><dl><div><dt>作用</dt><dd>{tool.purpose}</dd></div><div><dt>输入</dt><dd>{tool.input}</dd></div><div><dt>返回</dt><dd>{tool.return}</dd></div><div><dt>调用时机</dt><dd>{tool.invocation_timing}</dd></div></dl></details>)}</div>{!server.tools?.length && <small className="mcp-legacy-note">后端尚未重启到工具清单版本，暂不展示该 Server 的安全工具明细。</small>}</article>) : <Empty description="暂无可展示的安全工具" />}</div></section>
+    <section className="glass-panel catalog-library"><header className="panel-heading"><div><Text className="panel-kicker">REGISTERED SERVERS</Text><Title level={4}>工具能力矩阵</Title></div><Tag color="gold">runtime disabled</Tag></header><div className="mcp-grid">{loading ? <Skeleton active paragraph={{ rows: 12 }} /> : displayServers.length ? displayServers.map((server) => <article className={`mcp-card ${server.candidate ? 'is-candidate' : ''}`} key={server.server_id}><header><div className="mcp-title"><CatalogIcon name={server.icon || SERVER_ICON_NAMES[server.server_id]} /><span><b>{server.name}</b><small>{server.server_id} · {server.tool_count ?? server.tools?.length ?? 0} 个安全工具</small></span></div><Tag color="green"><SafetyCertificateOutlined /> 安全 Server</Tag></header><p className="mcp-server-purpose">{server.purpose}</p><div className="mcp-tool-list">{(server.tools || []).map((tool) => <details className="mcp-tool" key={tool.tool_id}><summary><span><CatalogIcon name={tool.icon} /> {tool.display_name || tool.name}</span><small>{tool.name} · {tool.risk_level} · 运行时未暴露</small></summary><dl><div><dt>作用</dt><dd>{tool.purpose}</dd></div><div><dt>输入</dt><dd>{tool.input}</dd></div><div><dt>返回</dt><dd>{tool.return}</dd></div><div><dt>调用时机</dt><dd>{tool.invocation_timing}</dd></div></dl></details>)}</div>{!server.tools?.length && <small className="mcp-legacy-note">后端尚未重启到工具清单版本，暂不展示该 Server 的安全工具明细。</small>}</article>) : <Empty description="暂无可展示的安全工具" />}</div></section>
   </div>
 }
