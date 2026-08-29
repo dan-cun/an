@@ -14,6 +14,7 @@ from typing import Any
 
 from security_agent.guardrail import Guardrail, GuardrailDecision
 from security_agent.mcp_generated import GeneratedMCPStore
+from security_agent.penetration_integration import project_title_for_run
 from security_agent.schemas import (
     Evidence,
     Finding,
@@ -453,7 +454,7 @@ class WorkspaceSecurityAuditTool(BaseTool):
 
 class ReverseModuleTool(BaseTool):
     manifest = ToolManifest(
-        name="reverse_module", version="1", description="PE/ELF static triage via the reverse 安全智能体平台 service.",
+        name="reverse_module", version="1", description="PE/ELF static triage via the reverse analysis service.",
         scenarios=[Scenario.REVERSE_TRIAGE], input_schema={"type":"object","properties":{"target":{"type":"string"}},"required":["target"]},
         output_schema={"type":"object"}, risk_level=RiskLevel.R1, permissions=["workspace:read"], timeout_seconds=120,
     )
@@ -522,7 +523,7 @@ class PenetrationModuleTool(BaseTool):
         scope = ", ".join(context.target_scope) or str(args.get("target", "."))
         payload = json.dumps(
             {
-                "title": f"安全智能体平台 {context.run_id}",
+                "title": project_title_for_run(context.run_id),
                 "origin": f"统一工作台上传题目；授权范围：{scope}",
                 "goal": objective,
                 "hints": hints,

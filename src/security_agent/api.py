@@ -78,9 +78,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await close_gateway_safely(gateway)
 
     app = FastAPI(
-        title="安全智能体 API",
+        title="安全任务 API",
         version="0.1.0",
-        description="Auditable and recoverable network-security agent runtime.",
+        description="Auditable and recoverable security-task runtime.",
         lifespan=lifespan,
     )
     app.state.service = service

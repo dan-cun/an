@@ -203,7 +203,7 @@ class LedgerStore:
             "reporter": "形成最终结论",
         }
         lines = [
-            f"# {state.task.name or '安全智能体平台 任务'}：可审计思考过程",
+            f"# {state.task.name or '安全任务'}：可审计思考过程",
             "",
             f"- 运行 ID：`{run_id}`",
             f"- 状态：`{state.status.value}`",

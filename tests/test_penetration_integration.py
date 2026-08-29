@@ -27,7 +27,7 @@ def test_normalize_penetration_graph_preserves_ai_fact_intent_semantics() -> Non
                     "to": "f001",
                     "description": "验证登录参数是否可注入",
                     "creator": "ai-worker-1",
-                    "worker": None,
+                    "worker": "ai-worker-1",
                     "created_at": "2026-08-28T00:00:01Z",
                     "concluded_at": "2026-08-28T00:00:05Z",
                 },
@@ -76,9 +76,14 @@ def test_normalize_penetration_graph_preserves_ai_fact_intent_semantics() -> Non
     assert nodes["intent:i003"]["type"] == "intent"
     assert nodes["intent:i003"]["status"] == "exploring"
     assert nodes["hint:h001"]["ai_generated"] is False
+    assert nodes["worker:ai-worker-1"]["status"] == "confirmed"
+    assert nodes["worker:ai-worker-2"]["status"] == "exploring"
 
     edges = {(edge["source"], edge["target"], edge["type"]) for edge in graph["edges"]}
     assert ("fact:origin", "intent:i001", "intent-chain") in edges
     assert ("intent:i001", "fact:f001", "produces") in edges
+    assert ("intent:i001", "worker:ai-worker-1", "worker-assignment") in edges
+    assert ("worker:ai-worker-1", "fact:f001", "worker-output") in edges
     assert ("fact:f001", "intent:i002", "hypothesis") in edges
     assert graph["counts"]["vulnerability"] == 1
+    assert graph["counts"]["worker"] == 2

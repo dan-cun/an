@@ -628,7 +628,7 @@ class EvaluationService:
         score = "待私有验证" if job.task_score is None else f"{job.task_score:.2f} / 100"
         scoring_status = str((task or {}).get("score_status") or job.status.value)
         content = (
-            "# 安全智能体平台 Test3.0 单题评分报告\n\n"
+            "# 安全任务单题评分报告\n\n"
             f"- 评测 ID：`{job.evaluation_id}`\n"
             f"- 题目：`{job.benchmark_task_id}`\n"
             f"- 数据版本：`{job.dataset_version}`\n"

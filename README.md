@@ -1,4 +1,35 @@
-# 安全智能体平台
+# 安全任务平台
+
+本仓库包含统一安全任务工作台、FastAPI 后端、代码审计与应急响应能力，以及对外部
+逆向/渗透黑板服务的适配器。所有模块仅用于已授权的本地测试环境。
+
+## 组件、端口与连接关系
+
+| 组件 | Windows 本地开发 | Docker Compose | 用途 |
+| --- | ---: | ---: | --- |
+| 前端工作台 | `127.0.0.1:5173` | `127.0.0.1:5173` | Vite/Nginx 页面 |
+| 统一 API | `127.0.0.1:8001` | `127.0.0.1:8000` | REST、WebSocket、任务编排 |
+| 逆向外部模块 | `127.0.0.1:8002` | 外部配置 | `/health/live` 与逆向分析接口 |
+| 渗透/黑板外部模块 | `127.0.0.1:8000`（独立运行时） | 建议映射宿主机 `8011` | `/projects` 与黑板任务接口 |
+| PostgreSQL | 不启用 | Compose 内部 `5432` | 持久化数据库 |
+| Qdrant | 不启用 | Compose 内部 `6333` | 可选向量检索 |
+
+本地开发时统一 API 使用 `8001`，因此可将独立黑板服务保持在 `8000`。Docker 模式的统一 API
+占用宿主机 `8000`，此时需要把外部黑板服务映射到其他宿主端口，并设置对应的
+`SECURITY_AGENT_PENETRATION_BASE_URL`。
+
+## 目录与配置文件
+
+- `src/security_agent/`：后端、任务编排、经验库和外部模块适配器。
+- `frontend/`：统一工作台前端；`frontend/Dockerfile` 用于 Nginx 镜像。
+- `config/`、`examples/`：运行配置和示例任务。
+- `docker-compose.yml`、`Dockerfile`：前端、API、PostgreSQL、Qdrant 编排。
+- `.env.example`：完整环境变量模板；本机复制为 `.env` 后修改。
+- `Cairn-worker-full` 的独立实现通过 `SECURITY_AGENT_PENETRATION_BASE_URL` 接入，目标仓库的
+  `codex/cairn-worker-full` 分支保存对应外部运行时改动。
+
+不会提交 `.env`、真实 API Key、`data/`、SQLite 数据库、Python `.venv/` 或前端
+`node_modules/`。这些目录由下面的命令自动创建。
 
 ## Test3.0 单题评测闭环
 
@@ -36,7 +67,10 @@ SECURITY_AGENT_BENCHMARK_PYTHON_EXECUTABLE=C:/path/to/scorer-venv/Scripts/python
 - FastAPI 上传、任务、状态、报告、审批、账本和 WebSocket API。
 - Docker Compose：API、PostgreSQL、Qdrant；API 使用非 root、只读文件系统和移除 Linux capabilities。
 
-## 本地运行
+## 虚拟环境与本地运行
+
+Python 依赖由 `uv` 管理，首次同步会在项目根目录创建被 Git 忽略的 `.venv`；前端依赖由
+`npm ci` 安装到被忽略的 `frontend/node_modules`。不要手工复制虚拟环境到仓库。
 
 ```powershell
 uv sync --all-extras
@@ -71,19 +105,42 @@ curl.exe -F "file=@sample.py" http://127.0.0.1:8000/api/v1/uploads
 
 提交到 `POST /api/v1/tasks`，再使用返回的 `run_id` 查询 `/api/v1/runs/{run_id}`、报告和账本。
 
-## Docker Compose
-
 ## 前端
 
 业务前端使用 `5173` 端口，后端 API 本地使用 `8001` 端口：
 
 ```powershell
 Set-Location frontend
-npm install
+npm ci
 npm run dev
 ```
 
 访问 `http://127.0.0.1:5173`。Vite 默认把 REST 和 WebSocket 请求代理到 `127.0.0.1:8001`。
+
+### 启动外部模块
+
+外部模块在独立目录运行，统一 API 只通过配置的 HTTP 地址访问：
+
+```powershell
+# 黑板/渗透服务（Cairn worker）
+Set-Location C:\kaifa\tool\Cairn-worker-full
+uv sync --project cairn
+docker compose -f docker-compose.yaml up -d
+# 独立运行时默认地址为 http://127.0.0.1:8000
+
+# 逆向服务（如已部署）
+# 将其健康地址配置为 http://127.0.0.1:8002
+```
+
+然后在统一平台的 `.env` 中设置：
+
+```dotenv
+SECURITY_AGENT_REVERSE_BASE_URL=http://127.0.0.1:8002
+SECURITY_AGENT_PENETRATION_BASE_URL=http://127.0.0.1:8000
+```
+
+若统一 API 使用 Docker Compose（宿主机 `8000` 已被占用），请将 Cairn compose 的端口映射
+改为例如 `8011:8000`，并将上面的渗透地址改为 `http://127.0.0.1:8011`。
 
 ## Docker Compose
 

@@ -290,7 +290,7 @@ export function TaskModal({ open, onClose, onCreated }) {
           </Dragger>
         </Form.Item>
         {mode === 'single_file' && <div className="material-source-grid">
-          <Form.Item label="靶场网址（可选）" extra="仅提交地址，不会由 安全智能体平台 自动访问未授权目标">
+          <Form.Item label="靶场网址（可选）" extra="仅提交地址，不会由安全任务平台自动访问未授权目标">
             <Input value={targetUrl} onChange={(event) => setTargetUrl(event.target.value)} placeholder="https://target.lab.local/" inputMode="url" />
           </Form.Item>
           <Form.Item label="文本材料（可选）" extra="可粘贴题目说明、接口信息或补充线索">

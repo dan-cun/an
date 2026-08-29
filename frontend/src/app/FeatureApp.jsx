@@ -39,7 +39,7 @@ export function FeatureApp() {
   return <Layout className={`feature-shell ${collapsed ? 'is-collapsed' : ''}`}>
     <ControlStarfield />
     <Sider className="feature-sidebar" width={236} collapsedWidth={72} collapsed={collapsed} trigger={null}>
-      <button className="sidebar-title" type="button" onClick={() => navigate('/dashboard')}><span><b>安全智能体平台</b><small>任务编排与审计</small></span></button>
+      <button className="sidebar-title" type="button" onClick={() => navigate('/dashboard')}><span><b>安全任务平台</b><small>任务编排与审计</small></span></button>
       <Menu mode="inline" selectedKeys={[active]} items={items} onClick={({ key }) => navigate(key)} />
       <div className="sidebar-foot"><i className={backend ? 'is-online' : ''} /><span>{backend ? 'Runtime online' : 'Runtime offline'}</span></div>
     </Sider>

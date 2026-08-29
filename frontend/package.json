@@ -1,5 +1,5 @@
 {
-  "name": "security-agent-frontend",
+  "name": "sec-frontend",
   "version": "0.1.0",
   "private": true,
   "type": "module",

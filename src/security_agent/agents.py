@@ -380,7 +380,7 @@ class PlannerAgent(BaseAgent):
                 output, meta = await self.gateway.structured(
                     role=self.model_role,
                     system_prompt=(
-                        "你是安全智能体平台规划智能体，只返回符合 Schema 的 JSON。"
+                        "你是安全任务规划智能体，只返回符合 Schema 的 JSON。"
                         "严禁危害系统与本机的安全；充分发挥自主决策能力，但所有计划必须绑定当前题目材料和授权范围。"
                     ),
                     user_prompt=prompt,

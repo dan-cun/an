@@ -24,6 +24,11 @@ class PenetrationProtocolError(RuntimeError):
     pass
 
 
+def project_title_for_run(run_id: str) -> str:
+    """Return the neutral project title used to link a run to its graph."""
+    return f"sec-task-{run_id}"
+
+
 def extract_project_id(state: AgentState) -> str | None:
     for observation in reversed(state.observations):
         data = observation.data
@@ -79,10 +84,20 @@ async def resolve_project_id(
     projects = await penetration_get(base_url, "/projects", timeout_seconds)
     if not isinstance(projects, list):
         raise PenetrationProtocolError("Penetration project list must be an array")
-    expected_titles = {f"安全智能体平台 {state.run_id}"}
     matches = [
         item for item in projects
-        if isinstance(item, dict) and item.get("title") in expected_titles and isinstance(item.get("id"), str)
+        if (
+            isinstance(item, dict)
+            and isinstance(item.get("title"), str)
+            and (
+                item.get("title") == project_title_for_run(state.run_id)
+                # Existing projects used a branded prefix. Matching the
+                # immutable run-id suffix keeps old blackboards readable
+                # without coupling new project titles to that label.
+                or item["title"].endswith(state.run_id)
+            )
+            and isinstance(item.get("id"), str)
+        )
     ]
     if not matches:
         return None
@@ -111,6 +126,16 @@ def normalize_penetration_graph(detail: dict[str, Any]) -> dict[str, Any]:
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
     fact_ids: set[str] = set()
+    worker_ids: set[str] = set()
+
+    # The blackboard stores the worker assignment on intents (and, while a project-level
+    # reason lease is active, on the project metadata).  The UI models the
+    # assignment as a first-class node so the visible chain is
+    # Origin -> Intent -> Worker -> Fact/Goal instead of hiding execution in
+    # an intent's metadata.
+    project_reason = project.get("reason") if isinstance(project.get("reason"), dict) else None
+    if project_reason and isinstance(project_reason.get("worker"), str) and project_reason["worker"].strip():
+        worker_ids.add(project_reason["worker"].strip())
 
     for fact in facts:
         if not isinstance(fact, dict) or not isinstance(fact.get("id"), str):
@@ -139,6 +164,9 @@ def normalize_penetration_graph(detail: dict[str, Any]) -> dict[str, Any]:
         source_ids = [item for item in intent.get("from", []) if isinstance(item, str)]
         target_id = intent.get("to") if isinstance(intent.get("to"), str) else None
         worker = intent.get("worker") if isinstance(intent.get("worker"), str) else None
+        if worker and worker.strip():
+            worker = worker.strip()
+            worker_ids.add(worker)
         concluded = bool(intent.get("concluded_at") or target_id)
         node_type = "hypothesis" if not concluded and not worker else "intent"
         status = "confirmed" if concluded else "exploring" if worker else "waiting"
@@ -172,6 +200,20 @@ def normalize_penetration_graph(detail: dict[str, Any]) -> dict[str, Any]:
                     "status": status,
                 }
             )
+        if worker:
+            # Assignment is deliberately represented as a separate edge.  It
+            # lets the frontend distinguish reasoning links from execution
+            # ownership while retaining the original intent->fact link.
+            edges.append(
+                {
+                    "id": f"edge:{intent_id}:worker:{worker}",
+                    "source": f"intent:{intent_id}",
+                    "target": f"worker:{worker}",
+                    "type": "worker-assignment",
+                    "label": "执行",
+                    "status": "exploring" if not concluded else "confirmed",
+                }
+            )
         if target_id and target_id in fact_ids:
             edges.append(
                 {
@@ -183,6 +225,40 @@ def normalize_penetration_graph(detail: dict[str, Any]) -> dict[str, Any]:
                     "status": "confirmed",
                 }
             )
+
+            if worker:
+                edges.append(
+                    {
+                        "id": f"edge:{intent_id}:worker-output:{worker}:{target_id}",
+                        "source": f"worker:{worker}",
+                        "target": f"fact:{target_id}",
+                        "type": "worker-output",
+                        "label": "产出",
+                        "status": "confirmed",
+                    }
+                )
+
+    for worker in sorted(worker_ids):
+        active = bool(project_reason and project_reason.get("worker") == worker)
+        active = active or any(
+            isinstance(intent, dict)
+            and isinstance(intent.get("worker"), str)
+            and intent.get("worker", "").strip() == worker
+            and not (intent.get("concluded_at") or intent.get("to"))
+            for intent in intents
+        )
+        nodes.append(
+            {
+                "id": f"worker:{worker}",
+                "raw_id": worker,
+                "type": "worker",
+                "label": worker,
+                "description": f"sec Worker：{worker}",
+                "status": "exploring" if active else "confirmed",
+                "ai_generated": True,
+                "creator": "sec-dispatcher",
+            }
+        )
 
     origin_exists = "origin" in fact_ids
     for hint in hints if isinstance(hints, list) else []:
