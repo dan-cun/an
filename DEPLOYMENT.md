@@ -42,6 +42,7 @@ npm run dev
 
 访问：
 
+- 安全运营驾驶舱：http://127.0.0.1:5173/cockpit
 - 前端工作台：http://127.0.0.1:5173
 - 应急响应：http://127.0.0.1:5173/incident-response
 - API 文档：http://127.0.0.1:8001/docs
