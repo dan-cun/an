@@ -50,8 +50,7 @@ npm run dev:cockpit
 
 访问：
 
-- 安全运营驾驶舱（独立端口）：http://127.0.0.1:5174/cockpit
-- 安全运营驾驶舱（工作台内）：http://127.0.0.1:5173/cockpit
+- 安全运营驾驶舱（唯一入口）：http://127.0.0.1:5174/cockpit
 - 前端工作台：http://127.0.0.1:5173
 - 应急响应：http://127.0.0.1:5173/incident-response
 - API 文档：http://127.0.0.1:8001/docs

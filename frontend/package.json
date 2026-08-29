@@ -5,10 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5173",
-    "dev:cockpit": "vite --host 127.0.0.1 --port 5174",
+    "dev:cockpit": "vite --host 127.0.0.1 --port 5174 --mode cockpit",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1 --port 5173",
-    "preview:cockpit": "vite preview --host 127.0.0.1 --port 5174",
+    "preview:cockpit": "vite preview --host 127.0.0.1 --port 5174 --mode cockpit",
     "test": "node --test tests/*.test.js"
   },
   "dependencies": {
