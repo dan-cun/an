@@ -93,7 +93,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # orchestrator or ToolBroker.  This keeps the current agent/tool graph
     # unchanged while exposing the migrated assets for inspection.
     app.state.prompt_catalog = PromptCatalog()
-    app.state.mcp_catalog = MCPCatalog()
+    app.state.mcp_catalog = MCPCatalog(generated_root=actual_settings.mcp_generated_root)
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
@@ -302,7 +302,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/modules")
     async def list_modules() -> dict[str, Any]:
         reverse_ok, reverse_error = await _module_health(actual_settings.reverse_base_url, "/health/live")
-        penetration_ok, penetration_error = await _module_health(actual_settings.penetration_base_url, "/health/live")
+        # The penetration adapter exposes its project collection as the stable
+        # readiness probe (the service intentionally has no /health/live route).
+        penetration_ok, penetration_error = await _module_health(actual_settings.penetration_base_url, "/projects")
         return {"schema_version": "1.0", "modules": [
             {"id": "code_audit", "name": "代码审计", "adapter": "workspace_security_audit", "available": True},
             {
@@ -321,6 +323,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/incident/status")
     async def incident_status() -> dict[str, Any]:
         return incident_manager.snapshot()
+
+    @app.get("/api/v1/incident/commands")
+    async def incident_commands() -> dict[str, Any]:
+        return {"schema_version": "1.0", "groups": incident_manager.command_catalog()}
 
     @app.post("/api/v1/incident/monitor/start")
     async def incident_monitor_start() -> dict[str, Any]:

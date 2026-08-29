@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from security_agent.fusion import classify_task
 from security_agent.llm import ModelCallMeta, ModelGateway, StreamObserver
+from security_agent.mcp_generated import GeneratedMCPStore, GeneratedToolProposal
 from security_agent.schemas import (
     AgentReport,
     AgentState,
@@ -52,6 +53,36 @@ SUPPORTED_SCENARIOS = {
     "penetration": Scenario.PENETRATION_TEST,
     "unsupported": Scenario.UNKNOWN,
 }
+
+MODULE_SAFETY_GUIDANCE = {
+    "code_audit": (
+        "你正在执行代码审计。严禁危害系统与本机的安全；只读取当前任务工作区中的题目文件、依赖和配置，"
+        "不得修改源码、删除文件、访问工作区外路径、读取凭据或主动连接网络。"
+    ),
+    "reverse": (
+        "你正在执行逆向分析。严禁危害系统与本机的安全；只分析当前任务工作区中上传的样本和题面材料，"
+        "优先使用静态方法，不得运行未知样本、修改系统状态、读取工作区外文件或连接非授权网络。"
+    ),
+    "penetration": (
+        "你正在执行授权渗透测试。严禁危害系统与本机的安全；只能对任务明确给出的 target_scope 靶场进行验证，"
+        "不得扩大目标范围、攻击本机或第三方、建立持久化、窃取凭据或破坏数据；每一步都必须服务于题目目标并保留证据。"
+    ),
+    "incident_response": (
+        "你正在执行应急响应。严禁危害系统与本机的安全；只读取当前任务工作区和明确授权的取证材料，"
+        "不得删除日志、终止进程、修改系统配置、访问无关主机或泄露敏感凭据。"
+    ),
+}
+
+
+def _module_safety_guidance(state: AgentState) -> str:
+    guidance = MODULE_SAFETY_GUIDANCE.get(
+        state.module_route,
+        "严禁危害系统与本机的安全；所有操作必须限定在当前题目材料和明确授权范围内。",
+    )
+    return (
+        f"{guidance}\n当前工作区：{state.workspace or '待建立'}\n"
+        f"当前授权靶场：{state.task.target_scope or ['未提供']}"
+    )
 
 
 def _material_context(state: AgentState, max_total: int = 60_000) -> str:
@@ -158,12 +189,14 @@ class TaskInterpreterAgent(BaseAgent):
                     role="worker",
                     system_prompt=(
                         "你是安全任务解释智能体。根据任务目标、授权范围和输入材料，判断题目属于 code_audit、reverse、"
-                        "penetration 或 unsupported。只返回符合 Schema 的 JSON；不要输出隐藏推理，只给出简短、可审计的中文依据。"
+                        "penetration 或 unsupported。严禁危害系统与本机的安全；只返回符合 Schema 的 JSON；"
+                        "不要输出隐藏推理，只给出简短、可审计的中文依据。"
                     ),
                     user_prompt=(
                         "请完成题型识别，并为后续模块选择提供可执行依据。\n"
                         "候选模块：code_audit=代码审计，reverse=逆向分析，penetration=授权渗透，unsupported=暂不支持。\n"
-                        f"规则分类器仅作为参考：{deterministic}\n{_material_context(state)}"
+                        f"规则分类器仅作为参考：{deterministic}\n{_material_context(state)}\n"
+                        "分类只用于选择受控模块，不得据此扩大文件或网络范围。"
                     ),
                     output_model=RouteOutput,
                     prompt_version=self.prompt_version,
@@ -339,13 +372,17 @@ class PlannerAgent(BaseAgent):
             prompt = (
                 "请为安全任务生成一个有界、可执行、可验证的单步计划。只允许使用指定适配器，所有面向用户的文本使用简体中文；"
                 "不要输出隐藏推理，只输出短的审计性 rationale_summary。\n"
+                f"{_module_safety_guidance(state)}\n"
                 f"允许适配器：{tool}\n{_material_context(state)}\n"
                 f"已验证经验：{[item.content for item in state.knowledge_hits]}"
             )
             try:
                 output, meta = await self.gateway.structured(
                     role=self.model_role,
-                    system_prompt="你是安全智能体平台规划智能体，只返回符合 Schema 的 JSON。",
+                    system_prompt=(
+                        "你是安全智能体平台规划智能体，只返回符合 Schema 的 JSON。"
+                        "严禁危害系统与本机的安全；充分发挥自主决策能力，但所有计划必须绑定当前题目材料和授权范围。"
+                    ),
                     user_prompt=prompt,
                     output_model=PlanOutput,
                     prompt_version=self.prompt_version,
@@ -379,10 +416,59 @@ class AnalystAgent(BaseAgent):
     model_role = "worker"
     prompt_version = "analysis-v2"
 
+    def __init__(self, gateway: ModelGateway, generated_store: GeneratedMCPStore | None = None) -> None:
+        super().__init__(gateway)
+        self.generated_store = generated_store
+
     async def run(self, state: AgentState, stream_observer: StreamObserver | None = None) -> AgentState:
         if not state.observations:
             return state
         latest = state.observations[-1]
+        if (
+            latest.status != ToolStatus.SUCCESS
+            and latest.error_code == "NO_AUDIT_COVERAGE"
+            and self.generated_store is not None
+            and _can_call_model(state, self.gateway)
+        ):
+            try:
+                proposal, meta = await self.gateway.structured(
+                    role=self.model_role,
+                    system_prompt=(
+                        "你是安全工具工程师。当受控扫描器无法识别输入格式时，提出一个声明式 MCP 适配器。"
+                        "只能使用 text_regex、binary_strings、json_keys 三种 operation；禁止输出 Python、Shell 或网络请求代码。"
+                        "严禁危害系统与本机的安全；在安全边界内充分自主选择最小可行适配方式，只返回符合 Schema 的 JSON。"
+                    ),
+                    user_prompt=(
+                        f"{_module_safety_guidance(state)}\n当前任务：{_material_context(state)}\n"
+                        f"扫描器错误：{latest.error_message or latest.summary}\n"
+                        f"覆盖率：{latest.data.get('coverage', {})}\n"
+                        "请选择能读取未覆盖文件的最小适配器，并给出可复用的正则（如不需要则为空）。"
+                    ),
+                    output_model=GeneratedToolProposal,
+                    prompt_version="toolsmith-v1",
+                    stage="toolsmith",
+                    stream_observer=stream_observer,
+                )
+                _record_model_call(state, meta)
+                path = self.generated_store.save(proposal, source_run_id=state.run_id)
+                state.decisions.append(
+                    DecisionRecord(
+                        decision="generated_tool_persisted",
+                        rationale_summary=f"模型为未覆盖输入生成受控适配器 {proposal.tool_id}，已写入 {path.name}，下一次重试将自动复用。",
+                        policy_ids=["MCP-GENERATED-DECLARATIVE-V1"],
+                        model_id=meta.model_id,
+                        prompt_version="toolsmith-v1",
+                    )
+                )
+            except Exception as exc:
+                state.decisions.append(
+                    DecisionRecord(
+                        decision="generated_tool_rejected",
+                        rationale_summary=f"模型适配器提议未通过 Schema 校验：{type(exc).__name__}。",
+                        policy_ids=["MCP-GENERATED-DECLARATIVE-V1"],
+                        model_id="toolsmith-fallback",
+                    )
+                )
         if latest.status != ToolStatus.SUCCESS:
             return state
         state.evidence.extend(latest.evidence)
@@ -394,8 +480,14 @@ class AnalystAgent(BaseAgent):
             try:
                 output, meta = await self.gateway.structured(
                     role=self.model_role,
-                    system_prompt="你是安全分析智能体。基于输入材料和受控工具观测提取可验证 Finding，只能引用给定 evidence_id；只返回 Schema JSON，不输出隐藏推理。",
-                    user_prompt=f"当前模块：{state.module_route}\n{_material_context(state)}\n工具观测：{latest.model_dump(mode='json')}\n可用证据 ID：{[item.evidence_id for item in state.evidence]}",
+                    system_prompt=(
+                        "你是安全分析智能体。基于输入材料和受控工具观测提取可验证 Finding，只能引用给定 evidence_id；"
+                        "严禁危害系统与本机的安全；充分自主判断问题成因，但只返回 Schema JSON，不输出隐藏推理。"
+                    ),
+                    user_prompt=(
+                        f"当前模块：{state.module_route}\n{_module_safety_guidance(state)}\n{_material_context(state)}\n"
+                        f"工具观测：{latest.model_dump(mode='json')}\n可用证据 ID：{[item.evidence_id for item in state.evidence]}"
+                    ),
                     output_model=AnalysisOutput,
                     prompt_version=self.prompt_version,
                     stage="analysis",
@@ -491,9 +583,12 @@ class ReporterAgent(BaseAgent):
             try:
                 output, meta = await self.gateway.structured(
                     role=self.model_role,
-                    system_prompt="你是安全报告智能体。根据已验证输入、工具观测、Finding 和 Evidence 生成中文总结；不得声称未验证的成功，只返回 Schema JSON。",
+                    system_prompt=(
+                        "你是安全报告智能体。根据已验证输入、工具观测、Finding 和 Evidence 生成中文总结；"
+                        "严禁危害系统与本机的安全；充分发挥自主归纳能力，不得声称未验证的成功，只返回 Schema JSON。"
+                    ),
                     user_prompt=(
-                        f"模块：{state.module_route}\n运行状态：{final_status.value}\n{_material_context(state)}\n"
+                        f"模块：{state.module_route}\n运行状态：{final_status.value}\n{_module_safety_guidance(state)}\n{_material_context(state)}\n"
                         f"观测：{[item.model_dump(mode='json') for item in state.observations]}\n"
                         f"发现：{[item.model_dump(mode='json') for item in state.findings]}\n"
                         f"证据：{[item.model_dump(mode='json') for item in state.evidence]}\n已有限制：{limitations}"

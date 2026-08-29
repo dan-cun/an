@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     upload_root: Path = Path("data/uploads")
     evaluation_root: Path = Path("data/evaluations")
     question_bank_root: Path = Path("data/question-banks")
+    mcp_generated_root: Path = Path("data/mcp-generated")
 
     benchmark_dataset_root: Path | None = None
     benchmark_private_root: Path | None = None
@@ -71,6 +72,7 @@ class Settings(BaseSettings):
             self.upload_root,
             self.evaluation_root,
             self.question_bank_root,
+            self.mcp_generated_root,
         ):
             path.mkdir(parents=True, exist_ok=True)
         if self.database_url.startswith("sqlite:///"):

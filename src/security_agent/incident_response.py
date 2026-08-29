@@ -33,6 +33,33 @@ class IncidentManager:
         self._monitor_task: asyncio.Task[Any] | None = None
         self._lock = asyncio.Lock()
 
+    @staticmethod
+    def command_catalog() -> list[dict[str, Any]]:
+        return [
+            {
+                "id": "monitoring",
+                "label": "实时监测命令",
+                "description": "读取本地测试环境的资产、进程与威胁指标",
+                "commands": [
+                    {"value": "scan_assets", "label": "立即扫描本地资产", "risk_level": 0},
+                    {"value": "inspect_processes", "label": "检查进程与服务", "risk_level": 0},
+                    {"value": "collect_indicators", "label": "采集威胁指标", "risk_level": 0},
+                    {"value": "refresh_baseline", "label": "刷新资产基线", "risk_level": 0},
+                ],
+            },
+            {
+                "id": "response",
+                "label": "应急处置命令",
+                "description": "对告警进行证据保全、遏制与恢复操作",
+                "commands": [
+                    {"value": "collect_evidence", "label": "收集事件证据", "risk_level": 0},
+                    {"value": "isolate_sample", "label": "隔离可疑样本", "risk_level": 2},
+                    {"value": "block_indicator", "label": "阻断威胁指标", "risk_level": 2},
+                    {"value": "restore_snapshot", "label": "从良好副本恢复", "risk_level": 2},
+                ],
+            },
+        ]
+
     def snapshot(self) -> dict[str, Any]:
         pending = [item for item in self._approvals.values() if item["status"] == "pending"]
         return {
@@ -84,12 +111,14 @@ class IncidentManager:
             raise ValueError("command must not be empty")
         # Commands are labels for the safe action registry, never shell text.
         safe_commands = {
-            "collect_evidence": ("收集证据", 0),
-            "refresh_baseline": ("刷新资产基线", 0),
-            "isolate_sample": ("隔离可疑样本", 2),
-            "block_indicator": ("阻断威胁指标", 2),
-            "restore_snapshot": ("从良好副本恢复", 2),
+            item["value"]: (item["label"], item["risk_level"])
+            for group in self.command_catalog()
+            for item in group["commands"]
         }
+        command_group = next(
+            (group["id"] for group in self.command_catalog() if any(item["value"] == normalized for item in group["commands"])),
+            "custom",
+        )
         label, risk = safe_commands.get(normalized, (normalized[:80], 2))
         action = {
             "action_id": str(uuid4()),
@@ -98,6 +127,7 @@ class IncidentManager:
             "target": target or "测试环境",
             "reason": reason,
             "risk_level": risk,
+            "command_group": command_group,
             "status": "awaiting_approval" if risk >= 2 else "queued",
             "created_at": _now(),
         }

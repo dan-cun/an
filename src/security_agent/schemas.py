@@ -397,6 +397,7 @@ class ToolContext(BaseModel):
     task_objective: str = ""
     target_scope: list[str] = Field(default_factory=list)
     input_artifacts: list[InputArtifact] = Field(default_factory=list)
+    mcp_generated_root: str | None = None
 
 
 class ToolResult(BaseModel):

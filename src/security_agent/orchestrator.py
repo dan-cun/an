@@ -22,6 +22,7 @@ from security_agent.guardrail import GuardrailAction
 from security_agent.ingest import IngestError, InputIngestor
 from security_agent.ledger import LedgerStore
 from security_agent.llm import ModelGateway
+from security_agent.mcp_generated import GeneratedMCPStore
 from security_agent.schemas import (
     AgentState,
     ApprovalDecision,
@@ -101,7 +102,7 @@ class SecurityOrchestrator:
         self.ingestor = InputIngestor(settings)
         self.interpreter = TaskInterpreterAgent(gateway)
         self.planner = PlannerAgent(gateway)
-        self.analyst = AnalystAgent(gateway)
+        self.analyst = AnalystAgent(gateway, GeneratedMCPStore(settings.mcp_generated_root))
         self.verifier = VerifierAgent(gateway)
         self.reporter = ReporterAgent(gateway)
         self.checkpointer = InMemorySaver()
@@ -556,6 +557,7 @@ class SecurityOrchestrator:
                 task_objective=state.task.objective,
                 target_scope=list(state.task.target_scope),
                 input_artifacts=list(state.input_artifacts),
+                mcp_generated_root=str(self.settings.mcp_generated_root),
             ),
         )
         state.observations.append(result)

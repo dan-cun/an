@@ -15,6 +15,7 @@ import { Alert, App, Button, Empty, Input, Select, Tag, Typography } from 'antd'
 import {
   getIncidentActions,
   getIncidentApprovals,
+  getIncidentCommands,
   getIncidentLogs,
   getIncidentStatus,
   incidentEventSocketUrl,
@@ -39,6 +40,7 @@ export function IncidentResponsePage() {
   const [logs, setLogs] = useState([])
   const [actions, setActions] = useState([])
   const [approvals, setApprovals] = useState([])
+  const [commandGroups, setCommandGroups] = useState([])
   const [command, setCommand] = useState('collect_evidence')
   const [target, setTarget] = useState('测试环境')
   const [reason, setReason] = useState('')
@@ -47,13 +49,14 @@ export function IncidentResponsePage() {
 
   const refresh = useCallback(async () => {
     try {
-      const [nextStatus, nextLogs, nextActions, nextApprovals] = await Promise.all([
-        getIncidentStatus(), getIncidentLogs(), getIncidentActions(), getIncidentApprovals(),
+      const [nextStatus, nextLogs, nextActions, nextApprovals, nextCommands] = await Promise.all([
+        getIncidentStatus(), getIncidentLogs(), getIncidentActions(), getIncidentApprovals(), getIncidentCommands(),
       ])
       setStatus(nextStatus)
       setLogs(nextLogs.logs || [])
       setActions(nextActions.actions || [])
       setApprovals(nextApprovals.approvals || [])
+      setCommandGroups(nextCommands.groups || [])
     } catch (error) {
       message.error(`读取应急响应状态失败：${error.message}`)
     }
@@ -130,8 +133,8 @@ export function IncidentResponsePage() {
         <div className="incident-action-list">{actions.length ? actions.slice(0, 6).map((item) => <div className="incident-action-row" key={item.action_id}><CodeOutlined /><span><b>{item.label}</b><small>{item.target} · {formatTime(item.created_at)}</small></span><Tag color={item.status === 'completed' ? 'success' : item.status === 'awaiting_approval' ? 'warning' : 'default'}>{actionLabel(item.status)}</Tag></div>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无处置动作" />}</div>
       </article>
 
-      <article className="glass-panel incident-command-card"><PanelHeading kicker="SAFE COMMAND CONSOLE" title="命令面板" icon={<CommandOutlined />} />
-        <div className="incident-command-form"><label>动作<Select value={command} onChange={setCommand} options={[{ value: 'collect_evidence', label: '收集证据（只读）' }, { value: 'refresh_baseline', label: '刷新资产基线（只读）' }, { value: 'isolate_sample', label: '隔离可疑样本（需审批）' }, { value: 'block_indicator', label: '阻断威胁指标（需审批）' }, { value: 'restore_snapshot', label: '从良好副本恢复（需审批）' }]} /></label><label>目标<Input value={target} onChange={(event) => setTarget(event.target.value)} /></label><label>说明<Input.TextArea rows={3} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="填写处置原因（可选）" /></label><Button type="primary" block icon={<CodeOutlined />} loading={loading} onClick={sendCommand}>提交命令</Button><Alert type="info" showIcon message="命令仅在测试环境中模拟执行，不调用系统 Shell。" /></div>
+      <article className="glass-panel incident-command-card"><PanelHeading kicker="MONITORING + RESPONSE COMMANDS" title="命令面板" icon={<CodeOutlined />} />
+        <div className="incident-command-form"><Alert type="info" showIcon message="选择实时监测或应急处置命令。所有动作仅作用于测试环境；高风险处置必须审批。" /><label>命令类型<Select value={command} onChange={setCommand} options={commandGroups.map((group) => ({ label: group.label, options: group.commands.map((item) => ({ value: item.value, label: `${item.label}${item.risk_level >= 2 ? '（需审批）' : '（只读）'}` })) }))} /></label><label>目标<Input value={target} onChange={(event) => setTarget(event.target.value)} /></label><label>说明<Input.TextArea rows={3} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="填写监测范围或处置原因（可选）" /></label><Button type="primary" block icon={<CodeOutlined />} loading={loading} onClick={sendCommand}>提交命令</Button></div>
       </article>
 
       <article className="glass-panel incident-approval-card"><PanelHeading kicker="HUMAN-IN-THE-LOOP" title="需要审批命令" icon={<PauseCircleOutlined />} /><div className="incident-approval-list">{pendingApprovals.length ? pendingApprovals.map((item) => <div className="incident-approval-row" key={item.approval_id}><div><b>{item.command}</b><small>{item.target} · 风险 R{item.risk_level}</small><p>{item.reason}</p></div><span><Button size="small" type="primary" onClick={() => resolve(item.approval_id, 'approve')}>批准</Button><Button size="small" danger onClick={() => resolve(item.approval_id, 'deny')}>拒绝</Button></span></div>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前没有待审批命令" />}</div></article>

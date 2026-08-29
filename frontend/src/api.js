@@ -78,6 +78,7 @@ export const classifyTask = (payload) =>
   request('/api/v1/tasks/classify', { method: 'POST', body: JSON.stringify(payload) })
 export const listModules = () => request('/api/v1/modules')
 export const getIncidentStatus = () => request('/api/v1/incident/status')
+export const getIncidentCommands = () => request('/api/v1/incident/commands')
 export const startIncidentMonitor = () => request('/api/v1/incident/monitor/start', { method: 'POST' })
 export const stopIncidentMonitor = () => request('/api/v1/incident/monitor/stop', { method: 'POST' })
 export const getIncidentLogs = (limit = 100) => request(`/api/v1/incident/logs?limit=${limit}`)

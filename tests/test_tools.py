@@ -6,6 +6,7 @@ import json
 import pytest
 
 from security_agent.schemas import InputArtifact, ToolContext, ToolStatus
+from security_agent.mcp_generated import GeneratedMCPStore, GeneratedToolProposal
 from security_agent.tools import BanditTool, PenetrationModuleTool, WorkspaceSecurityAuditTool
 
 
@@ -127,7 +128,7 @@ async def test_penetration_adapter_forwards_objective_scope_and_material(monkeyp
             step_id="step",
             workspace=str(tmp_path),
             allowed_paths=[str(tmp_path)],
-            module_base_url="http://cairn.test",
+            module_base_url="http://penetration.test",
             task_objective="完成授权渗透题并提交 flag",
             target_scope=["http://target.test"],
             input_artifacts=[artifact],
@@ -140,3 +141,34 @@ async def test_penetration_adapter_forwards_objective_scope_and_material(monkeyp
     assert "http://target.test" in payload["origin"]
     assert "question.txt" in payload["hints"][0]["content"]
     assert "authorized flag" in payload["hints"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_workspace_audit_reuses_generated_mcp_adapter(tmp_path: Path) -> None:
+    sample = tmp_path / "sample.dat"
+    sample.write_bytes(b"HEADER\x00FLAG=demo-value\x00END")
+    mcp_root = tmp_path / "mcp"
+    GeneratedMCPStore(mcp_root).save(
+        GeneratedToolProposal(
+            tool_id="dat-strings",
+            name="DAT 字符串提取器",
+            description="提取未知 DAT 文件中的可打印字符串",
+            file_extensions=[".dat"],
+            operation="binary_strings",
+            rationale="扫描器无法识别 DAT 文件，需要只读字符串提取。",
+        ),
+        source_run_id="run",
+    )
+    result = await WorkspaceSecurityAuditTool().invoke(
+        {"target": "."},
+        ToolContext(
+            run_id="run",
+            step_id="step",
+            workspace=str(tmp_path),
+            allowed_paths=[str(tmp_path)],
+            mcp_generated_root=str(mcp_root),
+        ),
+    )
+    assert result.status == ToolStatus.SUCCESS
+    assert result.data["coverage"]["generated_tools_used"] == ["dat-strings"]
+    assert result.evidence[0].source == "generated-mcp:dat-strings"

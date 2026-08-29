@@ -1,6 +1,6 @@
 # Prompt / MCP 迁移说明
 
-本阶段将 anquan2 的 Prompt 与 MCP 资产整理到 baseline（8001）后端，但不改变现有 Agent 图。
+本阶段将外部 Prompt 与 MCP 资产整理到统一后端（8001），但不改变现有 Agent 图。
 
 ## Prompt
 

@@ -1,4 +1,4 @@
-"""Read-only catalog for prompts migrated from anquan2.
+"""Read-only catalog for locally bundled prompts.
 
 The catalog deliberately does not participate in the agent graph.  It is a
 small compatibility layer so the prompts can be inspected and versioned
@@ -71,7 +71,7 @@ class PromptCatalog:
                         category=category,
                         purpose=purpose,
                         stage=stage,
-                        source="anquan2/secmind/backend/prompts/native/zh-CN",
+                        source="local prompt catalog",
                         path=path,
                     )
                 )

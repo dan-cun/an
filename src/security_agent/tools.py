@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from security_agent.guardrail import Guardrail, GuardrailDecision
+from security_agent.mcp_generated import GeneratedMCPStore
 from security_agent.schemas import (
     Evidence,
     Finding,
@@ -360,6 +361,66 @@ class WorkspaceSecurityAuditTool(BaseTool):
             findings.extend(bandit.data.get("findings", []))
             evidence.extend(bandit.evidence)
 
+        # Reuse previously approved declarative adapters for formats that the
+        # built-in scanner could not classify.  No generated code is executed.
+        generated_used: list[str] = []
+        if context.mcp_generated_root:
+            for proposal in GeneratedMCPStore(Path(context.mcp_generated_root)).proposals():
+                matched = [
+                    path for path in candidates
+                    if "*" in proposal.file_extensions or path.suffix.casefold() in proposal.file_extensions
+                ]
+                if not matched:
+                    continue
+                generated_used.append(proposal.tool_id)
+                for path in matched[:200]:
+                    try:
+                        raw = path.read_bytes()
+                    except OSError:
+                        continue
+                    relative = path.resolve().relative_to(workspace).as_posix()
+                    if relative not in scanned:
+                        scanned.append(relative)
+                    matches: list[str] = []
+                    if proposal.operation == "binary_strings":
+                        matches = [item.decode("ascii", errors="replace") for item in re.findall(rb"[ -~]{4,}", raw)[:20]]
+                    elif proposal.operation == "json_keys":
+                        try:
+                            parsed = json.loads(raw.decode("utf-8"))
+                        except (UnicodeDecodeError, json.JSONDecodeError):
+                            continue
+                        if isinstance(parsed, dict):
+                            matches = [str(key) for key in list(parsed)[:50]]
+                    else:
+                        text = raw.decode("utf-8", errors="replace").replace("\x00", "")
+                        for pattern in proposal.patterns:
+                            try:
+                                matches.extend(match.group(0) for match in list(re.finditer(pattern, text))[:20])
+                            except (re.error, TypeError):
+                                continue
+                    if not matches:
+                        continue
+                    digest = hashlib.sha256(raw).hexdigest()
+                    evidence_id = hashlib.sha256(f"generated:{proposal.tool_id}:{relative}:{digest}".encode()).hexdigest()[:24]
+                    evidence.append(Evidence(
+                        evidence_id=evidence_id,
+                        source=f"generated-mcp:{proposal.tool_id}",
+                        summary=f"{proposal.name} 读取 {relative}，提取 {len(matches)} 项结果",
+                        artifact_ref=relative,
+                        sha256=digest,
+                        metadata={"tool_id": proposal.tool_id, "operation": proposal.operation, "matches": matches[:20]},
+                    ))
+                    findings.append(Finding(
+                        rule_id=f"MCP-{proposal.tool_id.upper()}",
+                        severity="UNKNOWN",
+                        confidence="MEDIUM",
+                        path=relative,
+                        title=proposal.name,
+                        description=f"模型生成的受控工具提取结果：{'; '.join(matches[:5])}",
+                        evidence_ids=[evidence_id],
+                        raw={"tool_id": proposal.tool_id, "operation": proposal.operation},
+                    ).model_dump(mode="json"))
+
         coverage = {
             "input_file_count": len(candidates),
             "scanned_file_count": len(scanned),
@@ -367,8 +428,9 @@ class WorkspaceSecurityAuditTool(BaseTool):
             "skipped_file_count": len(skipped_binary),
             "skipped_files": skipped_binary,
             "python_bandit_used": bandit_used,
+            "generated_tools_used": generated_used,
         }
-        if not scanned:
+        if not scanned and not generated_used:
             return ToolResult(
                 status=ToolStatus.ERROR,
                 data={"findings": [], "coverage": coverage},
@@ -431,9 +493,9 @@ class PenetrationModuleTool(BaseTool):
 
     async def invoke(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
         base_url = context.module_base_url or "http://127.0.0.1:8000"
-        # Cairn's project API intentionally has a small, stable schema.  Put
-        # the complete task context into its facts/hints fields so the
-        # dispatcher and workers can reason over the actual uploaded question.
+        # The project API intentionally has a small, stable schema. Put the
+        # complete task context into its facts/hints fields so the dispatcher
+        # and workers can reason over the actual uploaded question.
         # Only bounded text excerpts are forwarded; the original files remain
         # in the audited workspace and their hashes provide an immutable link.
         hints: list[dict[str, str]] = []
