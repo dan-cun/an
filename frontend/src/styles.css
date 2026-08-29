@@ -249,4 +249,47 @@ button, input, textarea, select { font: inherit; }
 @media (max-width: 1200px) { .cockpit-grid { grid-template-columns: minmax(220px, .8fr) minmax(350px, 1.2fr); }.cockpit-threats { grid-column: 1 / -1; }.cockpit-threats .rank-list { grid-template-columns: repeat(2,1fr); } }
 @media (max-width: 850px) { .cockpit-header { align-items: flex-start; flex-direction: column; }.cockpit-header-status { width: 100%; justify-content: space-between; }.cockpit-grid { grid-template-columns: 1fr; }.cockpit-threats, .cockpit-capacity { grid-column: auto; }.cockpit-threats .rank-list { grid-template-columns: 1fr; }.coverage-bars { grid-template-columns: 1fr; gap: 8px; } }
 @media (max-width: 600px) { .cockpit-top-metrics { grid-template-columns: 1fr; }.cockpit-summary { align-items: flex-start; }.cockpit-summary .ant-btn { display: none; }.capacity-stats { grid-template-columns: 1fr; }.risk-score b { font-size: 23px; } }
+
+/* Full-screen cockpit composition: the robot and starfield remain visible behind translucent cards. */
+.cockpit-page { position: relative; isolation: isolate; min-height: calc(100vh - 124px); padding-bottom: 4px; }
+.cockpit-page > section { position: relative; z-index: 2; }
+.cockpit-ambient { position: absolute; z-index: 0; inset: -24px; pointer-events: none; overflow: hidden; }
+.cockpit-ambient .robot-widget { position: absolute; inset: 0; min-height: 680px; cursor: default; pointer-events: auto; }
+.cockpit-ambient .robot-widget-stage { inset: 0; }
+.cockpit-ambient .robot-widget-stage canvas { opacity: .88; filter: drop-shadow(0 0 28px rgba(68,207,255,.23)); }
+.cockpit-ambient .robot-widget-caption { display: none; }
+.cockpit-ambient .robot-fallback { top: 34%; }
+.cockpit-header { padding-right: 9px; }
+.cockpit-top-metrics { position: relative; z-index: 3; }
+.cockpit-metric { width: 100%; cursor: pointer; text-align: left; transition: border-color .2s, transform .2s, background .2s; }
+.cockpit-metric:hover { border-color: rgba(95,216,255,.55); background: rgba(17,35,42,.74); transform: translateY(-2px); }
+.cockpit-layout { position: relative; z-index: 2; display: grid; grid-template-columns: minmax(230px, .85fr) minmax(300px, 1.3fr) minmax(300px, .95fr); min-height: 540px; gap: 12px; }
+.cockpit-left, .cockpit-right { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.cockpit-center { display: flex; min-width: 0; min-height: 520px; padding: 30px 20px 24px; align-items: center; justify-content: flex-end; flex-direction: column; text-align: center; pointer-events: none; }
+.cockpit-center-label { display: flex; align-items: center; gap: 7px; color: #a8c4cc; font-size: 12px; letter-spacing: .05em; text-shadow: 0 0 12px rgba(86,212,255,.38); }
+.cockpit-center-label small { margin-left: 3px; color: #64d6a0; font-size: 9px; }
+.cockpit-center .robot-task-dialog { width: min(420px, 100%); margin: 13px 0 0; text-align: left; pointer-events: auto; }
+.cockpit-center-hint { margin: 10px 0 0; color: #59717a; font-size: 9px; }
+.cockpit-card { background: linear-gradient(145deg, rgba(12,25,31,.67), rgba(8,16,21,.57)); backdrop-filter: blur(11px); box-shadow: 0 15px 55px rgba(0,0,0,.18), inset 0 1px rgba(255,255,255,.03); }
+.cockpit-scenes, .cockpit-threats { min-height: 0; flex: 1; }
+.cockpit-scenes .panel-heading:first-child { min-height: 69px; }
+.scene-list { gap: 9px; padding: 14px 15px 20px; }
+.scene-row { width: 100%; padding: 7px 4px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; text-align: left; }
+.scene-row:hover { background: rgba(75,200,235,.08); }
+.scene-row .ant-progress-inner { background: rgba(65,100,112,.28); }
+.scene-row strong { font-size: 15px; }
+.trend-chart { width: 100%; border: 0; cursor: pointer; }
+.trend-column { flex: 1; }
+.trend-column i { display: block; width: 17px; min-height: 5px; border-radius: 4px 4px 2px 2px; background: linear-gradient(180deg,#6ce2ff,#317aa7); box-shadow: 0 0 10px rgba(72,186,227,.25); }
+.trend-column:hover i { background: linear-gradient(180deg,#b5f5ff,#5b9cda); box-shadow: 0 0 15px rgba(93,216,255,.58); }
+.cockpit-threats .panel-heading { min-height: 65px; }
+.cockpit-threats .rank-list { padding: 0 14px 10px; }
+.cockpit-threats .rank-row { padding: 9px 5px; }
+.cockpit-capacity { flex: none; min-height: 160px; }
+.cockpit-capacity .panel-heading { min-height: 58px; }
+.cockpit-capacity .capacity-stats { padding: 9px 12px 5px; background: rgba(86,116,128,.05); }
+.cockpit-capacity .coverage-bars { padding: 2px 14px 10px; }
+.cockpit-summary { z-index: 3 !important; background: rgba(10,24,30,.67); backdrop-filter: blur(11px); }
+@media (max-width: 1100px) { .cockpit-layout { grid-template-columns: minmax(220px, .9fr) minmax(300px, 1.1fr); }.cockpit-right { grid-column: 1 / -1; display: grid; grid-template-columns: 1.2fr .8fr; }.cockpit-threats { min-height: 0; }.cockpit-capacity { min-height: 100%; } }
+@media (max-width: 760px) { .cockpit-layout { grid-template-columns: 1fr; }.cockpit-center { min-height: 350px; order: -1; }.cockpit-right { grid-column: auto; display: flex; }.cockpit-ambient { inset: -12px; }.cockpit-ambient .robot-widget { min-height: 520px; } }
 .route-confirmation { display: grid; gap: 14px; }.route-result-hero { display: grid; grid-template-columns: 54px 1fr auto; padding: 19px; align-items: center; gap: 14px; border: 1px solid rgba(94, 215, 251, .25); border-radius: 10px; background: radial-gradient(circle at 0 50%, rgba(72, 199, 240, .12), transparent 52%), #10191d; }.route-result-hero > i { display: grid; width: 50px; height: 50px; place-items: center; color: #64dbff; background: rgba(82, 205, 245, .1); border-radius: 9px; font-size: 22px; }.route-result-hero > div { display: flex; flex-direction: column; }.route-result-hero div small { color: #5d7984; font-size: 8px; letter-spacing: .12em; }.route-result-hero div b { font-size: 19px; }.route-result-hero div span { color: #64808a; font: 9px Consolas, monospace; }.route-result-hero > strong { color: #6bddff; font-size: 31px; }.route-result-hero > strong small { font-size: 11px; }.route-evidence { display: flex; padding: 15px; flex-wrap: wrap; gap: 8px; border: 1px solid #27363d; border-radius: 9px; }.route-evidence header { width: 100%; margin-bottom: 3px; color: #9eb0b7; font-size: 10px; }.route-evidence span { padding: 5px 8px; color: #84a19c; background: rgba(75, 199, 139, .06); border: 1px solid rgba(75, 199, 139, .13); border-radius: 6px; font-size: 9px; }.route-evidence span svg { margin-right: 5px; color: #60d89e; }.route-pipeline { display: flex; padding: 14px 8px; align-items: center; justify-content: center; gap: 6px; overflow-x: auto; }.route-pipeline > span { display: flex; min-width: 70px; flex-direction: column; align-items: center; color: #53666e; }.route-pipeline > span b { display: grid; width: 24px; height: 24px; place-items: center; border: 1px solid #33444c; border-radius: 50%; font-size: 9px; }.route-pipeline > span small { margin-top: 5px; font-size: 8px; white-space: nowrap; }.route-pipeline > span.is-ready { color: #65d7ff; }.route-pipeline > span.is-ready b { border-color: rgba(92, 211, 247, .55); background: rgba(92, 211, 247, .08); }.route-pipeline > i { color: #3b4c53; font-style: normal; }.route-guard { display: flex; padding: 13px; align-items: center; gap: 11px; color: #e6b961; background: rgba(230, 175, 67, .055); border: 1px solid rgba(230, 175, 67, .14); border-radius: 8px; }.route-guard > svg { font-size: 18px; }.route-guard > span { display: flex; min-width: 0; flex: 1; flex-direction: column; }.route-guard b { font-size: 10px; }.route-guard small { overflow: hidden; color: #847961; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
