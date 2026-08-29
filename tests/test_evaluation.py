@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from secmind.evaluation import BenchmarkCatalog, EvaluationError, EvaluationStore
-from secmind.schemas import EvaluationJob, EvaluationMode, EvaluationStatus
+from security_agent.evaluation import BenchmarkCatalog, EvaluationError, EvaluationStore
+from security_agent.schemas import EvaluationJob, EvaluationMode, EvaluationStatus
 
 
 def _sha256(path: Path) -> str:

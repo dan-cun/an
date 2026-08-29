@@ -19,27 +19,27 @@ const findingTranslations = {
     description: '动态拼接 SQL 可能引入 SQL 注入风险。',
     remediation: '使用参数化查询或安全的 ORM 查询接口。',
   },
-  'SECMIND-SHELL-RANDOM-NAME': {
+  'AUDIT-SHELL-RANDOM-NAME': {
     title: '使用随机文件名保护密钥',
     description: '将密钥重命名为随机文件名并不构成访问控制，仍可能导致敏感内容泄露。',
     remediation: '将密钥存放在应用文件系统之外，并在访问点实施严格的身份验证和授权。',
   },
-  'SECMIND-SECRET-FLAG': {
+  'AUDIT-SECRET-FLAG': {
     title: '源码材料中存有敏感挑战密钥',
     description: '项目文件以明文保存了类似 flag 的敏感内容；证据中已主动隐藏匹配到的具体值。',
     remediation: '应在运行时注入密钥，并从源码压缩包和构建上下文中排除真实密钥。',
   },
-  'SECMIND-LEGACY-SPRING': {
+  'AUDIT-LEGACY-SPRING': {
     title: '使用已停止安全维护的 Spring Boot 依赖',
     description: '项目使用 Spring Boot 1.x 父依赖，该版本已不再获得安全更新。',
     remediation: '升级至仍受支持的 Spring Boot 版本，并在部署前执行依赖漏洞分析。',
   },
-  'SECMIND-LEGACY-VELOCITY': {
+  'AUDIT-LEGACY-VELOCITY': {
     title: '使用过时的 Apache Velocity 依赖',
     description: 'Apache Velocity 1.7 已经过时；当模板包含不可信数据时，其安全风险尤其突出。',
     remediation: '移除对不可信模板的运行时解析，并迁移至仍受支持的模板引擎版本。',
   },
-  'SECMIND-JAVA-SSTI': {
+  'AUDIT-JAVA-SSTI': {
     title: '用户可控输入进入服务端模板解析器',
     description: '请求参数与运行时模板解析出现在同一源码文件中，形成服务端模板注入攻击路径。',
     remediation: '禁止编译包含请求数据的模板；不可信输入只能作为经过转义的模板上下文变量传递。',
@@ -94,7 +94,6 @@ export function localizeModelOutput(content) {
       return `模型生成了 ${parsed.steps.length} 个候选执行步骤。候选工具：${tools.join('、') || '无'}。系统会继续执行工具白名单、参数范围和证据要求校验。`
     }
   } catch {
-    // 非 JSON 公开输出保留原文，并应用已知提示语翻译。
   }
   return localizePublicText(content)
 }

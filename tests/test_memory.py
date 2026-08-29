@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from qdrant_client import QdrantClient
 
-from secmind.memory import MemoryDocument, QdrantVectorStore
+from security_agent.memory import MemoryDocument, QdrantVectorStore
 
 
 def test_qdrant_store_requires_verified_episodic_memory() -> None:

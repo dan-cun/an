@@ -5,7 +5,7 @@ import zipfile
 
 from fastapi.testclient import TestClient
 
-from secmind.api import create_app
+from security_agent.api import create_app
 
 
 def test_health_and_task_flow(settings) -> None:
@@ -17,7 +17,7 @@ def test_health_and_task_flow(settings) -> None:
         model_config = client.get("/api/v1/model-config")
         assert model_config.status_code == 200
         assert model_config.json()["api_key_configured"] is False
-        assert "qwen_api_key" not in model_config.json()
+        assert "model_api_key" not in model_config.json()
         updated = client.put(
             "/api/v1/model-config",
             json={

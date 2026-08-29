@@ -4,14 +4,14 @@ from pathlib import Path
 
 import pytest
 
-from secmind.config import Settings
+from security_agent.config import Settings
 
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
     return Settings(
         demo_mode=True,
-        database_url=f"sqlite:///{(tmp_path / 'secmind.db').as_posix()}",
+        database_url=f"sqlite:///{(tmp_path / 'security_agent.db').as_posix()}",
         input_root=tmp_path / "inputs",
         upload_root=tmp_path / "uploads",
         run_root=tmp_path / "runs",

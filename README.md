@@ -1,4 +1,4 @@
-# SecMind
+# 安全智能体平台
 
 ## Test3.0 单题评测闭环
 
@@ -10,26 +10,26 @@ S-Suite 题目中选择输入，并在 Agent 完成后异步调用独立评分�
 本地接入可在 `.env` 中设置：
 
 ```dotenv
-SECMIND_EVALUATION_ROOT=./data/evaluations
-SECMIND_BENCHMARK_DATASET_ROOT=C:/path/to/01_候选可见题目/S-Suite_安全赛道/公开题目
-SECMIND_BENCHMARK_PRIVATE_ROOT=C:/path/to/private-gold
-SECMIND_BENCHMARK_SCORER_ROOT=C:/path/to/isolated-scorer
-SECMIND_BENCHMARK_PYTHON_EXECUTABLE=C:/path/to/scorer-venv/Scripts/python.exe
+SECURITY_AGENT_EVALUATION_ROOT=./data/evaluations
+SECURITY_AGENT_BENCHMARK_DATASET_ROOT=C:/path/to/01_候选可见题目/S-Suite_安全赛道/公开题目
+SECURITY_AGENT_BENCHMARK_PRIVATE_ROOT=C:/path/to/private-gold
+SECURITY_AGENT_BENCHMARK_SCORER_ROOT=C:/path/to/isolated-scorer
+SECURITY_AGENT_BENCHMARK_PYTHON_EXECUTABLE=C:/path/to/scorer-venv/Scripts/python.exe
 ```
 
 生产部署应把公开题库与私有评分端分开挂载；当前 Docker Compose 只透传配置，不会把宿主机
 评分器工作树自动打包进 API 镜像。
 
-`SECMIND_BENCHMARK_DATASET_ROOT` 必须直接指向 S-Suite 的“公开题目”目录；不要指向同时包含
+`SECURITY_AGENT_BENCHMARK_DATASET_ROOT` 必须直接指向 S-Suite 的“公开题目”目录；不要指向同时包含
 私有答案或 O-Suite 的发布包总目录。后端发现多个 S-Suite manifest 或目录配置错误时会安全拒绝注册。
 
-SecMind 是面向“具备自主决策能力的通用网络安全智能体”赛题的 A 组 Agent 核心。当前版本完成第一条可运行基线：安全接收代码输入，使用监督式 LangGraph 规划并调用 Bandit，生成带证据引用的报告，同时将决策写入可验证的哈希链账本。
+本项目是面向“具备自主决策能力的通用网络安全智能体”赛题的 Agent 核心。当前版本完成第一条可运行基线：安全接收代码输入，使用监督式 LangGraph 规划并调用 Bandit，生成带证据引用的报告，同时将决策写入可验证的哈希链账本。
 
 ## 已实现能力
 
 - LangGraph 监督式状态图：输入、分类、规划、校验、Guardrail、执行、分析、验证、报告和记忆门禁。
 - R0-R3 分级自治与 `interrupt()` 人工审批恢复。
-- 千问 OpenAI 兼容网关：结构化输出、超时重试、熔断、主备路由和确定性降级。
+- 兼容模型网关：结构化输出、超时重试、熔断、主备路由和确定性降级。
 - 工具注册协议与 Bandit 适配器；工具参数被限制在任务工作区内。
 - ZIP 路径穿越、软链接、数量、大小和压缩比检查。
 - SQLite/PostgreSQL 运行快照、append-only 哈希账本、JSONL 导出和 WebSocket 事件。
@@ -41,10 +41,14 @@ SecMind 是面向“具备自主决策能力的通用网络安全智能体”赛
 ```powershell
 uv sync --all-extras
 Copy-Item .env.example .env
-uv run secmind-api
+uv run security-agent-api
 ```
 
-默认 `SECMIND_DEMO_MODE=true`，不需要模型密钥。访问 `http://127.0.0.1:8000/docs` 查看接口。
+默认 `SECURITY_AGENT_DEMO_MODE=true`，不需要模型密钥。本地 API 默认监听 `http://127.0.0.1:8001`，访问 `http://127.0.0.1:8001/docs` 查看接口。
+
+### 应急响应
+
+安全运营菜单中的“应急响应”已内置于 API，不需要另行启动独立服务。启动 API 后会自动进入本地安全监测，页面提供监测日志、应急处理流程、命令面板和人工审批队列。高风险动作只做测试环境模拟，不执行任意系统命令。
 
 将待审计文件上传：
 
@@ -71,7 +75,7 @@ curl.exe -F "file=@sample.py" http://127.0.0.1:8000/api/v1/uploads
 
 ## 前端
 
-业务前端使用 `5173` 端口，后端 API 使用 `8000` 端口：
+业务前端使用 `5173` 端口，后端 API 本地使用 `8001` 端口：
 
 ```powershell
 Set-Location frontend
@@ -79,7 +83,7 @@ npm install
 npm run dev
 ```
 
-访问 `http://127.0.0.1:5173`。Vite 会把 REST 和 WebSocket 请求代理到 `127.0.0.1:8000`。
+访问 `http://127.0.0.1:5173`。Vite 默认把 REST 和 WebSocket 请求代理到 `127.0.0.1:8001`。
 
 ## Docker Compose
 
@@ -88,7 +92,7 @@ cp .env.example .env
 docker compose up --build
 ```
 
-生产环境必须覆盖 `POSTGRES_PASSWORD`，并通过 Secret 管理 `SECMIND_QWEN_API_KEY`。具体模型 ID 和网关 Base URL 均为部署配置，不写死在业务代码中。
+生产环境必须覆盖 `POSTGRES_PASSWORD`，并通过 Secret 管理 `SECURITY_AGENT_MODEL_API_KEY`。具体模型 ID 和网关 Base URL 均为部署配置，不写死在业务代码中。
 
 ## 安全边界
 
@@ -99,6 +103,7 @@ docker compose up --build
 ## 文档
 
 - [架构与状态图](docs/architecture.md)
-- [B/C 组接口契约](docs/contracts.md)
+- [接口契约](docs/contracts.md)
 - [后续 Agent 工作包](docs/work-packages.md)
+- [部署、环境变量与首次启动](DEPLOYMENT.md)
 

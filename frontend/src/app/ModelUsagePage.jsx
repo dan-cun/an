@@ -134,7 +134,7 @@ export function ModelUsagePage() {
       <div>
         <Text className="panel-kicker">MODEL RUNTIME</Text>
         <Title level={2}>模型配置与用量</Title>
-        <p>配置 OpenAI 兼容服务与模型路由，并实时观察后端持久化的调用统计。</p>
+        <p>配置 兼容模型服务与模型路由，并实时观察后端持久化的调用统计。</p>
       </div>
       <div className="intro-tags">
         <Tag color={config?.api_key_configured ? 'success' : 'default'}>{config?.api_key_configured ? '密钥已配置' : '密钥未配置'}</Tag>
@@ -154,9 +154,9 @@ export function ModelUsagePage() {
             name="base_url"
             label="Base URL"
             rules={[{ required: true, message: '请输入 Base URL' }, { type: 'url', message: '请输入有效的 HTTP/HTTPS URL' }]}
-            extra="填写 OpenAI 兼容接口根地址，通常以 /v1 结尾。"
+            extra="填写 兼容模型 兼容接口根地址，通常以 /v1 结尾。"
           >
-            <Input prefix={<ApiOutlined />} placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" autoComplete="url" />
+            <Input prefix={<ApiOutlined />} placeholder="https://model-gateway.example/v1" autoComplete="url" />
           </Form.Item>
           <Form.Item
             name="api_key"
@@ -173,13 +173,13 @@ export function ModelUsagePage() {
           </div>
           <div className="model-selector-grid">
             <Form.Item name="planner_model" label="规划模型" rules={modelRules}>
-              <Input placeholder="例如 qwen-plus" autoComplete="off" />
+              <Input placeholder="例如 planner-model" autoComplete="off" />
             </Form.Item>
             <Form.Item name="worker_model" label="工作模型" rules={modelRules}>
-              <Input placeholder="例如 qwen-turbo" autoComplete="off" />
+              <Input placeholder="例如 worker-model" autoComplete="off" />
             </Form.Item>
             <Form.Item name="fallback_model" label="回退模型" rules={modelRules}>
-              <Input placeholder="例如 qwen-max" autoComplete="off" />
+              <Input placeholder="例如 fallback-model" autoComplete="off" />
             </Form.Item>
           </div>
           <div className="runtime-hint"><span>请求超时</span><b>{config?.timeout_seconds} 秒</b></div>
@@ -200,5 +200,6 @@ export function ModelUsagePage() {
         <div className="model-decisions"><div className="subheading"><b>按模型决策记录</b><span>{usage?.models?.length || 0} 个模型</span></div>{usage?.models?.length ? usage.models.map((model) => <div className="model-decision-row" key={model.model}><span><CheckCircleOutlined /><b>{model.model}</b></span><span><small>决策</small>{model.decision_count}</span><span><small>流程</small>{model.run_count}</span></div>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无模型决策记录" />}</div>
       </section>
     </div>
+
   </div>
 }

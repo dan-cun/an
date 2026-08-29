@@ -6,7 +6,7 @@ import httpx
 import pytest
 from pydantic import BaseModel
 
-from secmind.llm import ModelGatewayError, QwenGateway
+from security_agent.llm import ModelGatewayError, ModelGateway
 
 
 class Output(BaseModel):
@@ -16,8 +16,8 @@ class Output(BaseModel):
 @pytest.mark.asyncio
 async def test_gateway_retries_retryable_response(settings) -> None:
     settings.demo_mode = False
-    settings.qwen_api_key = "test-key"
-    settings.fallback_model = "qwen-fallback"
+    settings.model_api_key = "test-key"
+    settings.fallback_model = "fallback-model"
     calls = 0
 
     def handler(_: httpx.Request) -> httpx.Response:
@@ -31,7 +31,7 @@ async def test_gateway_retries_retryable_response(settings) -> None:
         )
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    gateway = QwenGateway(settings, client)
+    gateway = ModelGateway(settings, client)
     output, meta = await gateway.structured(
         role="planner",
         system_prompt="system",
@@ -47,7 +47,7 @@ async def test_gateway_retries_retryable_response(settings) -> None:
 
 @pytest.mark.asyncio
 async def test_gateway_requires_enabled_credentials(settings) -> None:
-    gateway = QwenGateway(settings)
+    gateway = ModelGateway(settings)
     with pytest.raises(ModelGatewayError, match="demo mode"):
         await gateway.structured(
             role="worker",
@@ -71,8 +71,8 @@ async def test_gateway_requires_enabled_credentials(settings) -> None:
 @pytest.mark.asyncio
 async def test_gateway_falls_back_after_invalid_primary_output(settings) -> None:
     settings.demo_mode = False
-    settings.qwen_api_key = "test-key"
-    settings.fallback_model = "qwen-fallback"
+    settings.model_api_key = "test-key"
+    settings.fallback_model = "fallback-model"
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
@@ -80,7 +80,7 @@ async def test_gateway_falls_back_after_invalid_primary_output(settings) -> None
         return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    gateway = QwenGateway(settings, client)
+    gateway = ModelGateway(settings, client)
     output, meta = await gateway.structured(
         role="planner",
         system_prompt="system",
@@ -96,7 +96,7 @@ async def test_gateway_falls_back_after_invalid_primary_output(settings) -> None
 @pytest.mark.asyncio
 async def test_gateway_embeddings(settings) -> None:
     settings.demo_mode = False
-    settings.qwen_api_key = "test-key"
+    settings.model_api_key = "test-key"
 
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -110,7 +110,7 @@ async def test_gateway_embeddings(settings) -> None:
         )
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    gateway = QwenGateway(settings, client)
+    gateway = ModelGateway(settings, client)
     vectors = await gateway.embeddings(["first", "second"])
     await client.aclose()
     assert vectors == [[1.0, 0.0], [0.0, 1.0]]
@@ -121,7 +121,7 @@ async def test_gateway_embeddings(settings) -> None:
 @pytest.mark.asyncio
 async def test_streaming_gateway_emits_deltas_and_completion(settings) -> None:
     settings.demo_mode = False
-    settings.qwen_api_key = "test-key"
+    settings.model_api_key = "test-key"
     observed: list[tuple[str, dict]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -140,7 +140,7 @@ async def test_streaming_gateway_emits_deltas_and_completion(settings) -> None:
         observed.append((event_type, payload))
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    gateway = QwenGateway(settings, client)
+    gateway = ModelGateway(settings, client)
     output, meta = await gateway.structured(
         role="planner",
         system_prompt="system",
@@ -164,7 +164,7 @@ async def test_streaming_gateway_emits_deltas_and_completion(settings) -> None:
 @pytest.mark.asyncio
 async def test_streaming_gateway_emits_failure_before_fallback(settings) -> None:
     settings.demo_mode = False
-    settings.qwen_api_key = "test-key"
+    settings.model_api_key = "test-key"
     settings.fallback_model = "fallback"
     observed: list[tuple[str, dict]] = []
 
@@ -183,7 +183,7 @@ async def test_streaming_gateway_emits_failure_before_fallback(settings) -> None
         observed.append((event_type, payload))
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    gateway = QwenGateway(settings, client)
+    gateway = ModelGateway(settings, client)
     output, meta = await gateway.structured(
         role="planner",
         system_prompt="system",

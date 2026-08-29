@@ -3,8 +3,8 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from secmind.ledger import EventRow, LedgerStore
-from secmind.schemas import AgentState, RunStatus, TaskRequest
+from security_agent.ledger import EventRow, LedgerStore
+from security_agent.schemas import AgentState, RunStatus, TaskRequest
 
 
 def test_hash_chain_and_redaction(settings) -> None:

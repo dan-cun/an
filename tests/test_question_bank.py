@@ -6,9 +6,9 @@ from dataclasses import dataclass
 
 import pytest
 
-from secmind.llm import ModelCallMeta, ModelGatewayError
-from secmind.question_bank import QuestionBankError, QuestionBankService
-from secmind.schemas import (
+from security_agent.llm import ModelCallMeta, ModelGatewayError
+from security_agent.question_bank import QuestionBankError, QuestionBankService
+from security_agent.schemas import (
     AttachmentRef,
     DirectoryScanProposal,
     QuestionBankConfirmRequest,
@@ -120,6 +120,63 @@ async def test_manifest_is_authoritative_without_model(settings) -> None:
 
 
 @pytest.mark.asyncio
+async def test_formatted_metadata_json_builds_module_dispatch_plan(settings) -> None:
+    settings.prepare_directories()
+    source = settings.upload_root / "formatted-bank.zip"
+    _write_zip(
+        source,
+        {
+            "metadata.json": (
+                '{"title":"综合题库","count":2,"target":"隔离靶场",'
+                '"questions":[{"name":"Web 一","root":"questions/web-1","type":"web"},'
+                '{"name":"逆向一","root":"questions/rev-1","type":"reverse"}]}'
+            ),
+            "questions/web-1/index.html": "hello",
+            "questions/rev-1/sample.bin": b"MZ",
+        },
+    )
+    request = QuestionBankInspectRequest(
+        name="formatted question bank",
+        attachments=[AttachmentRef(ref=source.name, name=source.name)],
+        analysis_mode="formatted",
+    )
+    result = await QuestionBankService(settings).inspect_now(request)
+    assert result["status"] == "awaiting_confirmation"
+    assert result["boundary_source"] == "formatted_metadata"
+    assert result["formatted_metadata"]["target"] == "隔离靶场"
+    assert result["type_distribution"] == {"web": 1, "reverse": 1}
+    assert {item["module_route"] for item in result["dispatch_plan"]} == {"penetration", "reverse"}
+    assert {item["root"] for item in result["questions"]} == {
+        "formatted-bank/questions/web-1",
+        "formatted-bank/questions/rev-1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_formatted_metadata_txt_supports_question_lines(settings) -> None:
+    settings.prepare_directories()
+    source = settings.upload_root / "formatted-txt-bank.zip"
+    _write_zip(
+        source,
+        {
+            "题库信息.txt": "数量: 2\n目标: 内网测试\n题目1: Web题 | web | q1\n题目2: 逆向题 | reverse | q2\n",
+            "q1/index.html": "hello",
+            "q2/sample.elf": b"ELF",
+        },
+    )
+    request = QuestionBankInspectRequest(
+        name="formatted txt bank",
+        attachments=[AttachmentRef(ref=source.name, name=source.name)],
+        analysis_mode="formatted",
+    )
+    result = await QuestionBankService(settings).inspect_now(request)
+    assert result["status"] == "awaiting_confirmation"
+    assert result["formatted_metadata"]["format"] == "txt"
+    assert result["formatted_metadata"]["target"] == "内网测试"
+    assert result["type_distribution"] == {"web": 1, "reverse": 1}
+
+
+@pytest.mark.asyncio
 async def test_nested_archives_are_really_extracted_and_traced(settings) -> None:
     settings.prepare_directories()
     source = settings.upload_root / "nested-bank.zip"
@@ -221,7 +278,7 @@ async def test_invalid_or_overlapping_model_roots_do_not_fall_back_to_guessing(s
     _write_zip(source, {"q/src/app.py": "print(1)", "q/assets/x.txt": "x"})
     service = QuestionBankService(settings)
     with pytest.raises(QuestionBankError, match="包含冲突"):
-        service._validate_proposal_data(  # noqa: SLF001
+        service._validate_proposal_data(
             [
                 {"root": "conflict-bank/q", "name": "Q", "question_type": "code_audit"},
                 {"root": "conflict-bank/q/src", "name": "Wrong", "question_type": "code_audit"},
@@ -241,7 +298,7 @@ def test_single_branch_model_root_is_lifted_to_nearest_branch_boundary(settings)
         {"path": "bank/collection/alpha/backend/app.py", "size_bytes": 1},
         {"path": "bank/collection/beta/challenge/capture.pcap", "size_bytes": 1},
     ]
-    questions, _ = service._validate_proposal_data(  # noqa: SLF001 - structural validator test
+    questions, _ = service._validate_proposal_data(
         [
             {
                 "root": "bank/collection/alpha",
@@ -272,7 +329,7 @@ def test_confirmation_rejects_overlapping_user_roots(settings) -> None:
     settings.prepare_directories()
     service = QuestionBankService(settings)
     bank_id = "11111111-1111-1111-1111-111111111111"
-    service._save(  # noqa: SLF001 - narrow persisted-state validation test
+    service._save(
         {
             "bank_id": bank_id,
             "status": "needs_manual_mapping",

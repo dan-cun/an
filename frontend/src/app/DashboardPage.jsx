@@ -55,7 +55,7 @@ export function DashboardPage() {
   return <div className="ops-dashboard">
     <section className="command-hero">
       <div>
-        <Text className="panel-kicker">SECMIND COMMAND OVERVIEW</Text>
+        <Text className="panel-kicker">SECURITY OPERATIONS OVERVIEW</Text>
         <Title level={2}>安全态势总览</Title>
         <p>聚合代码审计、逆向分析与授权渗透任务，所有状态来自真实运行记录。</p>
       </div>

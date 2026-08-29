@@ -2,22 +2,16 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AuditOutlined,
   BranchesOutlined,
-  DownloadOutlined,
   FileTextOutlined,
   PlusOutlined,
   ReloadOutlined,
   SafetyCertificateOutlined,
   TeamOutlined,
 } from '@ant-design/icons'
-import { Alert, App, Button, Empty, Segmented, Space, Statistic, Steps, Tag, Typography } from 'antd'
+import { Alert, App, Button, Empty, Segmented, Space, Statistic, Typography } from 'antd'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
   eventSocketUrl,
-  evaluationEventSocketUrl,
-  evaluationReportUrl,
-  getEvaluation,
-  getEvaluationByRun,
-  getEvaluationScore,
   getLedger,
   getReport,
   getRun,
@@ -41,77 +35,22 @@ import { ModuleFlow } from './ModuleFlow.jsx'
 import { BlackboardGraph } from './BlackboardGraph.jsx'
 
 const { Text, Title, Paragraph } = Typography
-const EVALUATION_TERMINAL = new Set([
-  'SCORED', 'UNSCORABLE_NO_GOLD', 'INPUT_MISMATCH', 'AGENT_FAILED', 'SCORING_FAILED', 'VERIFIER_REQUIRED',
-])
-const STATUS_LABELS = {
-  INPUT_VALIDATING: '校验输入', AGENT_QUEUED: 'Agent 排队', AGENT_RUNNING: '实时分析',
-  REPORT_READY: '报告就绪', SCORE_QUEUED: '评分排队', SCORING: '独立评分', SCORED: '评分完成',
-  VERIFIER_REQUIRED: '等待私有验证', INPUT_MISMATCH: '输入不匹配', AGENT_FAILED: '分析失败',
-  SCORING_FAILED: '评分失败', UNSCORABLE_NO_GOLD: '无 Gold，不可评分',
-}
-
-function evaluationStep(status) {
-  const order = ['INPUT_VALIDATING', 'AGENT_QUEUED', 'AGENT_RUNNING', 'REPORT_READY', 'SCORE_QUEUED', 'SCORING', 'SCORED']
-  if (status === 'VERIFIER_REQUIRED') return 6
-  const index = order.indexOf(status)
-  return index < 0 ? 0 : Math.min(3, index < 3 ? index : index < 5 ? 2 : 3)
-}
-
-function ScorePanel({ evaluation, score }) {
-  if (!evaluation) return <div className="score-empty">
+function TaskStatusPanel({ run, events }) {
+  if (!run) return <div className="score-empty">
     <SafetyCertificateOutlined />
-    <b>评分面板</b>
-    <span>普通上传任务只生成分析报告；请选择 Test3.0 已注册题目以启动独立评分。</span>
+    <b>任务状态</b>
+    <span>新建任务后，系统会在这里显示模块路由、执行进度和证据统计。</span>
   </div>
-  const task = score?.task
-  const failed = ['INPUT_MISMATCH', 'AGENT_FAILED', 'SCORING_FAILED'].includes(evaluation.status)
-  return <div className="score-panel">
-    <div className="score-heading">
-      <span><SafetyCertificateOutlined /><b>Test3.0 单题评分</b></span>
-      <Tag color={evaluation.status === 'SCORED' ? 'success' : failed ? 'error' : 'processing'}>
-        {STATUS_LABELS[evaluation.status] || evaluation.status}
-      </Tag>
-    </div>
-    <Steps
-      size="small"
-      current={evaluationStep(evaluation.status)}
-      status={failed ? 'error' : evaluation.status === 'SCORED' ? 'finish' : 'process'}
-      items={[{ title: '校验' }, { title: '分析' }, { title: '投影报告' }, { title: '评分' }]}
-    />
+  const routeLabels = { code_audit: '代码审计', reverse: '逆向分析', penetration: '渗透测试', unsupported: '人工研判' }
+  return <div className="score-panel task-status-panel">
+    <div className="score-heading"><span><SafetyCertificateOutlined /><b>任务状态</b></span><StatusTag status={run.status} /></div>
     <div className="score-metrics">
-      <Statistic
-        title="当前题得分"
-        value={evaluation.task_score ?? '--'}
-        precision={typeof evaluation.task_score === 'number' ? 2 : undefined}
-        suffix={typeof evaluation.task_score === 'number' ? '/ 100' : ''}
-      />
-      <span><small>题目</small><b>{evaluation.benchmark_task_id}</b></span>
-      <span><small>判分器</small><b>{task?.score_status || '等待结果'}</b></span>
-      <span><small>题目状态</small><b>{task?.completed === true ? '已完成' : task?.completed === false ? '未完成' : '等待结果'}</b></span>
+      <Statistic title="执行步骤" value={run.current_step ?? 0} suffix={`/ ${run.total_steps ?? 0}`} />
+      <span><small>分析模块</small><b>{routeLabels[run.module_route] || run.module_route || '待识别'}</b></span>
+      <span><small>输入材料</small><b>{run.budget?.tool_calls_used ?? 0} 次工具调用</b></span>
+      <span><small>账本事件</small><b>{events.length}</b></span>
     </div>
-    {task?.components && Object.keys(task.components).length > 0 && <div className="score-components">
-      {Object.entries(task.components).map(([name, value]) => <span key={name}><small>{name}</small><b>{Number(value).toFixed(1)}</b></span>)}
-    </div>}
-    {evaluation.status === 'VERIFIER_REQUIRED' && <Alert
-      type="warning"
-      showIcon
-      title="该补丁题需要私有验证回执"
-      description="当前不会伪造分数；请在隔离评分端完成补丁验证后再生成正式结果。"
-    />}
-    {evaluation.error_message && <Alert type="error" showIcon title={evaluation.error_code} description={evaluation.error_message} />}
-    <Alert
-      type="info"
-      showIcon
-      title="这是单题结果，不是 Full60 正式综合分"
-      description={`评分器报告状态：${evaluation.report_status || '等待生成'}。私有 Gold、私有路径与评分日志不会发送到浏览器。`}
-    />
-    {evaluation.report_available && <Button
-      block
-      icon={<DownloadOutlined />}
-      href={evaluationReportUrl(evaluation.evaluation_id)}
-      target="_blank"
-    >下载脱敏评分报告</Button>}
+    <Alert type="info" showIcon title="统一文件分析流程" description="所有题目通过单文件分析、AI辅助文件分析或题库格式化文件分析进入对应安全模块；结果以可验证证据为准。" />
   </div>
 }
 
@@ -120,37 +59,26 @@ export function WorkbenchPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const [runs, setRuns] = useState([])
-  const [selectedId, setSelectedId] = useState('')
+  const [selectedId, setSelectedId] = useState(
+    () => new URLSearchParams(location.search).get('run') || '',
+  )
   const [run, setRun] = useState(null)
   const [events, setEvents] = useState([])
   const [report, setReport] = useState(null)
-  const [evaluation, setEvaluation] = useState(null)
-  const [score, setScore] = useState(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [view, setView] = useState('stream')
   const [streamConnected, setStreamConnected] = useState(false)
   const [modules, setModules] = useState([])
   const socketRef = useRef(null)
-  const evaluationSocketRef = useRef(null)
   const lastSequence = useRef(0)
-  const lastEvaluationSequence = useRef(0)
 
   const refreshRuns = useCallback(async () => {
     const data = await listRuns()
     setRuns(data.runs || [])
-    if (!selectedId && data.runs?.length) setSelectedId(data.runs[0].run_id)
-  }, [selectedId])
-
-  const refreshEvaluation = useCallback(async (runId = selectedId, knownEvaluationId = null) => {
-    if (!runId && !knownEvaluationId) return
-    try {
-      const next = knownEvaluationId ? await getEvaluation(knownEvaluationId) : await getEvaluationByRun(runId)
-      setEvaluation(next)
-      if (next.score_available || next.status === 'VERIFIER_REQUIRED') {
-        try { setScore(await getEvaluationScore(next.evaluation_id)) } catch { setScore(null) }
-      } else setScore(null)
-    } catch { setEvaluation(null); setScore(null) }
-  }, [selectedId])
+    if (data.runs?.length) {
+      setSelectedId((currentId) => currentId || data.runs[0].run_id)
+    }
+  }, [])
 
   const refreshSelected = useCallback(async () => {
     if (!selectedId) return
@@ -159,8 +87,19 @@ export function WorkbenchPage() {
     setEvents(ledger.events || [])
     lastSequence.current = Math.max(0, ...(ledger.events || []).map((item) => item.sequence))
     try { setReport(await getReport(selectedId)) } catch { setReport(null) }
-    await refreshEvaluation(selectedId)
-  }, [selectedId, refreshEvaluation])
+  }, [selectedId])
+
+  const clearMissingRun = useCallback(async () => {
+    socketRef.current?.close()
+    setRun(null)
+    setEvents([])
+    setReport(null)
+    setSelectedId('')
+    const params = new URLSearchParams(location.search)
+    params.delete('run')
+    navigate({ pathname: location.pathname, search: params.toString() }, { replace: true })
+    await refreshRuns()
+  }, [location.pathname, location.search, navigate, refreshRuns])
 
   useEffect(() => { refreshRuns().catch((error) => message.error(error.message)) }, [])
   useEffect(() => { listModules().then((data) => setModules(data.modules || [])).catch(() => {}) }, [])
@@ -170,18 +109,24 @@ export function WorkbenchPage() {
     if (params.get('run')) setSelectedId(params.get('run'))
   }, [location.search])
   useEffect(() => {
-    if (!selectedId) { setRun(null); setEvents([]); setEvaluation(null); setScore(null); return undefined }
-    refreshSelected().catch((error) => message.error(`读取任务失败：${error.message}`))
+    if (!selectedId) { setRun(null); setEvents([]); return undefined }
+    refreshSelected().catch((error) => {
+      if (error.status === 404) {
+        clearMissingRun().catch(() => {})
+        return
+      }
+      message.error(`读取任务失败：${error.message}`)
+    })
     const timer = setInterval(() => {
       refreshSelected().catch(() => {})
       refreshRuns().catch(() => {})
     }, 4000)
     return () => clearInterval(timer)
-  }, [selectedId, refreshSelected])
+  }, [selectedId, refreshSelected, clearMissingRun])
 
   useEffect(() => {
     socketRef.current?.close()
-    if (!selectedId) return undefined
+    if (!selectedId || run?.run_id !== selectedId) return undefined
     let disposed = false
     let reconnectTimer
     const connect = () => {
@@ -213,29 +158,7 @@ export function WorkbenchPage() {
       socketRef.current?.close()
       setStreamConnected(false)
     }
-  }, [selectedId])
-
-  useEffect(() => {
-    evaluationSocketRef.current?.close()
-    if (!evaluation?.evaluation_id || EVALUATION_TERMINAL.has(evaluation.status)) return undefined
-    let disposed = false
-    let reconnectTimer
-    const connect = () => {
-      if (disposed) return
-      const socket = new WebSocket(evaluationEventSocketUrl(evaluation.evaluation_id, lastEvaluationSequence.current))
-      evaluationSocketRef.current = socket
-      socket.onmessage = ({ data }) => {
-        try {
-          const event = JSON.parse(data)
-          lastEvaluationSequence.current = Math.max(lastEvaluationSequence.current, event.sequence || 0)
-          refreshEvaluation(selectedId, evaluation.evaluation_id).catch(() => {})
-        } catch { /* Polling remains as a fallback. */ }
-      }
-      socket.onclose = () => { if (!disposed) reconnectTimer = window.setTimeout(connect, 1500) }
-    }
-    connect()
-    return () => { disposed = true; window.clearTimeout(reconnectTimer); evaluationSocketRef.current?.close() }
-  }, [evaluation?.evaluation_id, evaluation?.status, selectedId, refreshEvaluation])
+  }, [selectedId, run?.run_id])
 
   const network = useMemo(() => deriveNetwork(events, run?.status), [events, run?.status])
   const auditCoverage = useMemo(
@@ -250,19 +173,18 @@ export function WorkbenchPage() {
     refreshSelected()
   }
 
-  async function created({ runId, evaluationId }) {
+  async function created({ runId }) {
     setModalOpen(false)
-    setRun(null); setEvents([]); setReport(null); setScore(null)
-    lastSequence.current = 0; lastEvaluationSequence.current = 0
+    setRun(null); setEvents([]); setReport(null)
+    lastSequence.current = 0
     setSelectedId(runId); setView('stream')
-    if (evaluationId) await refreshEvaluation(runId, evaluationId)
     await refreshRuns()
     message.success(`任务 ${compactId(runId)} 已进入执行队列`)
   }
 
   return <div className="workbench-grid">
     <TaskModal open={modalOpen} onClose={() => setModalOpen(false)} onCreated={created} />
-    <aside className="glass-panel session-panel">
+    <aside className={`glass-panel session-panel ${view === 'graph' ? 'is-graph-hidden' : ''}`}>
       <div className="panel-heading"><div><Text className="panel-kicker">RUNS</Text><Title level={4}>任务流程</Title></div><Button type="text" icon={<ReloadOutlined />} onClick={refreshRuns} /></div>
       <Button type="primary" icon={<PlusOutlined />} block onClick={() => setModalOpen(true)}>新建任务</Button>
       <div className="session-list">{runs.length ? runs.map((item) => <button
@@ -271,7 +193,7 @@ export function WorkbenchPage() {
       ><span><b>{item.name || (item.scenario === 'unknown' ? '等待场景识别' : item.scenario)}</b><small>{item.name && item.scenario !== 'unknown' ? `${item.scenario} · ` : ''}{compactId(item.run_id)}</small></span><StatusTag status={item.status} /></button>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无任务" />}</div>
     </aside>
 
-    <section className="glass-panel conversation-panel">
+    <section className={`glass-panel conversation-panel ${view === 'graph' ? 'is-graph' : ''}`}>
       <div className="panel-heading"><div><Text className="panel-kicker">ACTIVE RUN</Text><Title level={4}>{run ? `${run.name || run.scenario} · ${compactId(run.run_id)}` : '实时协作等待任务'}</Title></div><Space wrap>
         <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>新建任务</Button>
         <Segmented size="small" value={view} onChange={setView} options={[
@@ -287,15 +209,15 @@ export function WorkbenchPage() {
       <ModuleFlow run={run} events={events} />
       {run?.pending_approval && <Alert className="approval-alert" type="warning" showIcon title={`步骤 ${run.pending_approval.step_id} 等待审批`} description={<Space><Button type="primary" onClick={() => approval('approve')}>批准</Button><Button danger onClick={() => approval('deny')}>拒绝</Button></Space>} />}
       {view === 'result' && run && <Alert className="coverage-alert" type={auditCoverage?.scanned_file_count ? 'success' : 'warning'} showIcon title={auditCoverage?.scanned_file_count ? `实际审计覆盖 ${auditCoverage.scanned_file_count}/${auditCoverage.input_file_count} 个文件` : '缺少实际文件覆盖证据'} description={auditCoverage?.scanned_file_count ? `${auditCoverage.skipped_file_count || 0} 个不支持或二进制文件未扫描。` : '不能仅凭工具返回成功判定全部材料已完成审计。'} />}
-      {view === 'stream' ? <RuntimeStream events={events} connected={streamConnected} /> : view === 'graph' ? <BlackboardGraph run={run} events={events} /> : view === 'thinking' ? <AIThoughtTimeline events={events} runStatus={run?.status} downloadUrl={run ? thoughtProcessUrl(run.run_id) : ''} /> : report ? <div className="report-view">
+      {view === 'stream' ? <RuntimeStream events={events} connected={streamConnected} active={Boolean(selectedId)} /> : view === 'graph' ? <BlackboardGraph run={run} events={events} /> : view === 'thinking' ? <AIThoughtTimeline events={events} runStatus={run?.status} downloadUrl={run ? thoughtProcessUrl(run.run_id) : ''} /> : report ? <div className="report-view">
         <div className="report-hero"><Text className="panel-kicker">安全审计报告</Text><Title level={3}>{localizePublicText(report.executive_summary)}</Title><Paragraph>{report.limitations?.map(localizePublicText).join('；') || '所有结论均已通过证据引用验证。'}</Paragraph></div>
         {report.findings?.map(localizeFinding).map((finding) => <article className="finding-card" key={finding.finding_id}><span className={`severity is-${finding.severity.toLowerCase()}`}>{severityLabels[finding.severity] || finding.severity}</span><div><b>{finding.title}</b><p>{finding.description}</p>{finding.remediation && <p className="finding-remediation"><strong>修复建议：</strong>{finding.remediation}</p>}<small>{finding.path}{finding.line ? `:${finding.line}` : ''} · 证据 {(finding.evidence_ids || []).join(', ')}</small></div></article>)}
       </div> : <Empty description="报告将在运行结束后生成" />}
     </section>
 
-    <aside className="glass-panel inspector-panel">
-      <div className="panel-heading"><div><Text className="panel-kicker">EVALUATION</Text><Title level={4}>评分与协作</Title></div><SafetyCertificateOutlined className="heading-icon" /></div>
-      <ScorePanel evaluation={evaluation} score={score} />
+    <aside className={`glass-panel inspector-panel ${view === 'graph' ? 'is-graph-hidden' : ''}`}>
+      <div className="panel-heading"><div><Text className="panel-kicker">TASK STATUS</Text><Title level={4}>任务状态与协作</Title></div><SafetyCertificateOutlined className="heading-icon" /></div>
+      <TaskStatusPanel run={run} events={events} />
       <div className="inspector-divider"><TeamOutlined /> 智能体网络</div>
       <AgentNetwork network={network} eventCount={events.length} />
       <div className="inspector-divider">模块状态</div>

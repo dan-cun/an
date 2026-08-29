@@ -85,7 +85,7 @@ test('nests the current public stream under its step and hides a corrected faile
 
 test('localizes historical report findings and public AI summaries', () => {
   const finding = localizeFinding({
-    rule_id: 'SECMIND-JAVA-SSTI',
+    rule_id: 'AUDIT-JAVA-SSTI',
     title: 'User-controlled input reaches a server-side template parser',
     description: 'Request input reaches template parsing.',
   })

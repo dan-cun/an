@@ -15,9 +15,10 @@ async function request(path, options = {}) {
     try {
       detail = JSON.parse(raw).detail || raw
     } catch {
-      // Preserve plain-text server errors.
     }
-    throw new Error(detail || `请求失败 (${response.status})`)
+    const error = new Error(detail || `请求失败 (${response.status})`)
+    error.status = response.status
+    throw error
   }
   return response.status === 204 ? null : response.json()
 }
@@ -27,6 +28,9 @@ export const getModelConfig = () => request('/api/v1/model-config')
 export const getModelUsage = () => request('/api/v1/model-usage')
 export const testModelConfig = (payload) => request('/api/v1/model-config/test', { method: 'POST', body: JSON.stringify(payload) })
 export const updateModelConfig = (payload) => request('/api/v1/model-config', { method: 'PUT', body: JSON.stringify(payload) })
+export const getPromptCatalog = () => request('/api/v1/prompts')
+export const getMcpCatalog = () => request('/api/v1/mcp/catalog')
+export const getIntegrationStatus = () => request('/api/v1/integration-status')
 
 function socketUrl(path, params = {}, location = window.location) {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -42,6 +46,8 @@ export const modelUsageSocketUrl = (location = window.location) => socketUrl('/a
 export const listRuns = () => request('/api/v1/runs')
 export const getRun = (runId) => request(`/api/v1/runs/${encodeURIComponent(runId)}`)
 export const getReport = (runId) => request(`/api/v1/runs/${encodeURIComponent(runId)}/report`)
+export const getPenetrationGraph = (runId) =>
+  request(`/api/v1/runs/${encodeURIComponent(runId)}/penetration-graph`)
 export const thoughtProcessUrl = (runId) =>
   `${API_BASE}/api/v1/runs/${encodeURIComponent(runId)}/thoughts/export`
 export async function getLedger(runId, afterSequence = 0) {
@@ -71,6 +77,24 @@ export const createTask = (payload) =>
 export const classifyTask = (payload) =>
   request('/api/v1/tasks/classify', { method: 'POST', body: JSON.stringify(payload) })
 export const listModules = () => request('/api/v1/modules')
+export const getIncidentStatus = () => request('/api/v1/incident/status')
+export const startIncidentMonitor = () => request('/api/v1/incident/monitor/start', { method: 'POST' })
+export const stopIncidentMonitor = () => request('/api/v1/incident/monitor/stop', { method: 'POST' })
+export const getIncidentLogs = (limit = 100) => request(`/api/v1/incident/logs?limit=${limit}`)
+export const getIncidentActions = (limit = 100) => request(`/api/v1/incident/actions?limit=${limit}`)
+export const getIncidentApprovals = (limit = 100) => request(`/api/v1/incident/approvals?limit=${limit}`)
+export const submitIncidentCommand = (payload) => request('/api/v1/incident/command', { method: 'POST', body: JSON.stringify(payload) })
+export const resolveIncidentApproval = (approvalId, payload) => request(`/api/v1/incident/approvals/${encodeURIComponent(approvalId)}`, { method: 'POST', body: JSON.stringify(payload) })
+export const incidentEventSocketUrl = (location = window.location) => socketUrl('/api/v1/incident/events', {}, location)
+export const listExperiences = (params = {}) => {
+  const query = new URLSearchParams(Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== ''))
+  return request(`/api/v1/experiences${query.size ? `?${query}` : ''}`)
+}
+export const createExperience = (payload) =>
+  request('/api/v1/experiences', { method: 'POST', body: JSON.stringify(payload) })
+export const deleteExperience = (experienceId) =>
+  request(`/api/v1/experiences/${encodeURIComponent(experienceId)}`, { method: 'DELETE' })
+export const backfillExperiences = () => request('/api/v1/experiences/backfill', { method: 'POST' })
 
 export const inspectQuestionBank = (payload) =>
   request('/api/v1/question-banks/inspect', { method: 'POST', body: JSON.stringify(payload) })

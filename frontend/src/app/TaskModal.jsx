@@ -1,13 +1,11 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { BranchesOutlined, CheckCircleOutlined, FileSearchOutlined, InboxOutlined, SafetyCertificateOutlined } from '@ant-design/icons'
 import { Alert, App, Button, Descriptions, Form, Input, Modal, Radio, Select, Spin, Table, Tag, Upload } from 'antd'
 import {
   confirmQuestionBank,
-  createEvaluation,
   createTask,
   getQuestionBankInspection,
   inspectQuestionBank,
-  listBenchmarkTasks,
   questionBankEventSocketUrl,
   uploadFile,
   classifyTask,
@@ -18,10 +16,8 @@ const { Dragger } = Upload
 export function TaskModal({ open, onClose, onCreated }) {
   const { message } = App.useApp()
   const [form] = Form.useForm()
-  const [mode, setMode] = useState('analysis')
+  const [mode, setMode] = useState('single_file')
   const [files, setFiles] = useState([])
-  const [catalog, setCatalog] = useState(null)
-  const [loadingCatalog, setLoadingCatalog] = useState(false)
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState('')
   const [error, setError] = useState('')
@@ -29,24 +25,6 @@ export function TaskModal({ open, onClose, onCreated }) {
   const [classification, setClassification] = useState(null)
   const [targetUrl, setTargetUrl] = useState('')
   const [textMaterial, setTextMaterial] = useState('')
-  const selectedTaskId = Form.useWatch('benchmarkTaskId', form)
-  const selectedTask = useMemo(
-    () => catalog?.tasks?.find((item) => item.task_id === selectedTaskId),
-    [catalog, selectedTaskId],
-  )
-
-  useEffect(() => {
-    if (!open || mode !== 'benchmark' || catalog || loadingCatalog) return
-    setLoadingCatalog(true)
-    listBenchmarkTasks()
-      .then((data) => {
-        setCatalog(data)
-        if (data.tasks?.length) form.setFieldValue('benchmarkTaskId', data.tasks[0].task_id)
-      })
-      .catch((catalogError) => setError(`读取已注册题库失败：${catalogError.message}`))
-      .finally(() => setLoadingCatalog(false))
-  }, [open, mode, catalog, loadingCatalog, form])
-
   useEffect(() => {
     const bankId = questionBankInspection?.bank_id
     if (!bankId || questionBankInspection.status !== 'inspecting') return undefined
@@ -71,8 +49,9 @@ export function TaskModal({ open, onClose, onCreated }) {
 
   async function submit(values) {
     setError('')
-    const normalizedUrl = mode === 'question_bank' ? '' : targetUrl.trim()
-    const normalizedText = mode === 'question_bank' ? '' : textMaterial.trim()
+    const isQuestionBankMode = mode === 'ai_assisted' || mode === 'formatted_question_bank'
+    const normalizedUrl = isQuestionBankMode ? '' : targetUrl.trim()
+    const normalizedText = isQuestionBankMode ? '' : textMaterial.trim()
     if (normalizedUrl) {
       try {
         const parsed = new URL(normalizedUrl)
@@ -82,26 +61,19 @@ export function TaskModal({ open, onClose, onCreated }) {
         return
       }
     }
-    if (mode !== 'benchmark' && !files.length && !normalizedUrl && !normalizedText) {
-      setError(mode === 'question_bank'
+    if (!files.length && !normalizedUrl && !normalizedText) {
+      setError(isQuestionBankMode
         ? '请先上传题库文件或压缩包；没有输入材料时无法创建题库分析任务。'
-        : '请先上传题目文件、源码或压缩包；没有输入材料时无法进行实际分析。')
+        : '请先上传一个题目文件、源码或压缩包；没有输入材料时无法进行实际分析。')
+      return
+    }
+    if (mode === 'single_file' && files.length > 1) {
+      setError('单文件分析一次只能上传一个文件；多个题目请改用 AI辅助文件分析或题库格式化文件分析。')
       return
     }
     setBusy(true)
     try {
-      if (mode === 'benchmark') {
-        setProgress('正在校验注册题目并创建独立评测')
-        const evaluation = await createEvaluation({
-          mode: 'benchmark',
-          name: values.name.trim(),
-          benchmark_task_id: values.benchmarkTaskId,
-          dataset_version: catalog.dataset_version,
-        })
-        if (!evaluation?.run_id) throw new Error('后端没有返回运行 ID')
-        await onCreated({ runId: evaluation.run_id, evaluationId: evaluation.evaluation_id })
-      } else {
-        const materialItems = [...files]
+      const materialItems = [...files]
         if (normalizedUrl) {
           materialItems.push({
             originFileObj: new File([normalizedUrl], 'target-url.url', { type: 'text/plain' }),
@@ -119,36 +91,36 @@ export function TaskModal({ open, onClose, onCreated }) {
           const uploaded = await uploadFile(file)
           attachments.push({ ref: uploaded.ref, name: uploaded.name })
         }
-        if (mode === 'question_bank') {
-          setProgress('正在识别题目边界、数量与类型')
-          const inspection = await inspectQuestionBank({
-            name: values.name.trim(),
-            attachments,
-          })
-          setQuestionBankInspection({ ...inspection, attachments, values })
-          setProgress('')
-          return
-        }
-        setProgress('正在识别题型并选择分析模块')
-        const route = await classifyTask({
-          // Feed a bounded excerpt of pasted material into deterministic routing;
-          // the original objective is preserved for the created task.
-          objective: routingObjective(values.objective, normalizedText),
+      if (isQuestionBankMode) {
+        setProgress(mode === 'formatted_question_bank' ? '正在读取格式化元数据并分配模块' : '正在识别题目边界、数量与类型')
+        const inspection = await inspectQuestionBank({
+          name: values.name.trim(),
           attachments,
-          target_scope: targetScopeFor(values, normalizedUrl),
-          expected_outputs: ['security_report'],
-          constraints: [],
+          analysis_mode: mode === 'formatted_question_bank' ? 'formatted' : 'ai_assisted',
         })
-        setClassification({ ...route, attachments, values, targetUrl: normalizedUrl })
+        setQuestionBankInspection({ ...inspection, attachments, values })
         setProgress('')
         return
       }
-      form.resetFields()
-      setFiles([])
-      setClassification(null)
-      setMode('analysis')
-      setTargetUrl('')
-      setTextMaterial('')
+      setProgress('正在识别题型并选择分析模块')
+      const route = await classifyTask({
+        objective: routingObjective(values.objective, normalizedText),
+        attachments,
+        target_scope: targetScopeFor(values, normalizedUrl),
+        expected_outputs: ['security_report'],
+        constraints: [],
+      })
+      setClassification({
+        ...route,
+        // Keep the exact material-aware objective used during preview routing.
+        // The backend receives the same context again when the task is confirmed.
+        objective: routingObjective(values.objective, normalizedText),
+        attachments,
+        values,
+        targetUrl: normalizedUrl,
+      })
+      setProgress('')
+      return
     } catch (submitError) {
       const detail = submitError instanceof Error ? submitError.message : String(submitError)
       setError(`提交失败：${detail}`)
@@ -167,14 +139,16 @@ export function TaskModal({ open, onClose, onCreated }) {
       const values = classification.values
       setProgress(`正在分发至${moduleLabel(classification.primary_type)}模块`)
       const task = await createTask({
-        name: values.name.trim(), objective: values.objective.trim(), attachments: classification.attachments,
+        name: values.name.trim(),
+        objective: classification.objective || values.objective.trim(),
+        attachments: classification.attachments,
         target_scope: targetScopeFor(values, classification.targetUrl),
         constraints: values.constraints ? [values.constraints.trim()] : [],
         expected_outputs: ['security_report'], autonomy_policy: values.autonomyPolicy,
       })
       if (!task?.run_id) throw new Error('后端没有返回任务 ID')
       await onCreated({ runId: task.run_id, evaluationId: null })
-      form.resetFields(); setFiles([]); setClassification(null); setMode('analysis'); setTargetUrl(''); setTextMaterial('')
+      form.resetFields(); setFiles([]); setClassification(null); setMode('single_file'); setTargetUrl(''); setTextMaterial('')
     } catch (submitError) {
       const detail = submitError instanceof Error ? submitError.message : String(submitError)
       setError(`任务创建失败：${detail}`)
@@ -202,7 +176,7 @@ export function TaskModal({ open, onClose, onCreated }) {
         name: values.name.trim(),
         objective: values.objective.trim(),
         attachments: questionBankInspection.attachments,
-        target_scope: values.targetScope ? [values.targetScope.trim()] : [],
+        target_scope: [values.targetScope, questionBankInspection.formatted_metadata?.target].filter(Boolean).map((item) => String(item).trim()).filter(Boolean),
         constraints: values.constraints ? [values.constraints.trim()] : [],
         expected_outputs: ['security_report'],
         autonomy_policy: values.autonomyPolicy,
@@ -213,7 +187,7 @@ export function TaskModal({ open, onClose, onCreated }) {
       form.resetFields()
       setFiles([])
       setQuestionBankInspection(null)
-      setMode('analysis')
+      setMode('single_file')
     } catch (submitError) {
       const detail = submitError instanceof Error ? submitError.message : String(submitError)
       setError(`题库确认失败：${detail}`)
@@ -230,7 +204,7 @@ export function TaskModal({ open, onClose, onCreated }) {
     setFiles([])
     setTargetUrl('')
     setTextMaterial('')
-    setMode('analysis')
+    setMode('single_file')
   }
 
   return <Modal
@@ -238,7 +212,7 @@ export function TaskModal({ open, onClose, onCreated }) {
     open={open}
     onCancel={busy ? undefined : () => { resetDraft(); onClose() }}
     width={questionBankInspection ? 960 : classification ? 780 : 720}
-    okText={questionBankInspection?.status === 'inspecting' ? '正在预检' : questionBankInspection ? '确认映射并创建任务' : classification ? '确认路由并启动' : mode === 'benchmark' ? '开始评测' : mode === 'question_bank' ? '上传并预检' : '上传并识别'}
+    okText={questionBankInspection?.status === 'inspecting' ? '正在预检' : questionBankInspection ? '确认映射并创建任务' : classification ? '确认路由并启动' : mode === 'ai_assisted' ? '上传并预检' : mode === 'formatted_question_bank' ? '读取格式并分配' : '上传并识别'}
     cancelText="取消"
     confirmLoading={busy}
     onOk={questionBankInspection ? confirmAndCreateQuestionBankTask : classification ? confirmAndCreateClassifiedTask : undefined}
@@ -265,9 +239,9 @@ export function TaskModal({ open, onClose, onCreated }) {
           value={mode}
           onChange={(event) => { setMode(event.target.value); setError('') }}
           options={[
-            { value: 'analysis', label: '普通文件分析' },
-            { value: 'question_bank', label: '题库文件分析' },
-            { value: 'benchmark', label: 'Test3.0 单题评测' },
+            { value: 'single_file', label: '单文件分析' },
+            { value: 'ai_assisted', label: 'AI辅助文件分析' },
+            { value: 'formatted_question_bank', label: '题库格式化文件分析' },
           ]}
         />
       </Form.Item>
@@ -283,49 +257,15 @@ export function TaskModal({ open, onClose, onCreated }) {
         <Input placeholder="例如：支付接口权限审计" maxLength={120} showCount />
       </Form.Item>
 
-      {mode === 'benchmark' ? <>
-        <Alert
-          type="info"
-          showIcon
-          title="基准模式使用服务端已注册题目"
-          description="工作台仅能读取该题公开 input；Agent 完成后由独立评分器读取私有 Gold 并返回脱敏的单题评分。"
-        />
-        <Spin spinning={loadingCatalog}>
-          <Form.Item
-            name="benchmarkTaskId"
-            label="注册题目"
-            rules={[{ required: true, message: '请选择一个已注册题目' }]}
-          >
-            <Select
-              showSearch
-              optionFilterProp="label"
-              placeholder="选择 T3S 题目"
-              options={(catalog?.tasks || []).map((item) => ({
-                value: item.task_id,
-                label: `${item.task_id} · ${item.primary_domain} · ${item.scoring_mode}`,
-              }))}
-            />
-          </Form.Item>
-        </Spin>
-        {selectedTask && <div className="benchmark-task-preview">
-          <Descriptions size="small" column={2}>
-            <Descriptions.Item label="数据版本">{selectedTask.dataset_version}</Descriptions.Item>
-            <Descriptions.Item label="难度"><Tag>{selectedTask.difficulty}</Tag></Descriptions.Item>
-            <Descriptions.Item label="领域">{selectedTask.primary_domain}</Descriptions.Item>
-            <Descriptions.Item label="评分模式">{selectedTask.scoring_mode}</Descriptions.Item>
-            <Descriptions.Item label="公开输入">{selectedTask.input_file_count} 个文件</Descriptions.Item>
-            <Descriptions.Item label="总大小">{selectedTask.input_size_bytes.toLocaleString()} B</Descriptions.Item>
-          </Descriptions>
-          <p>{selectedTask.prompt}</p>
-          <small>Manifest SHA-256：{selectedTask.input_manifest_sha256}</small>
-        </div>}
-      </> : <>
-        {mode === 'question_bank' && <Alert
+      <>
+        {(mode === 'ai_assisted' || mode === 'formatted_question_bank') && <Alert
           className="question-bank-notice"
           type="info"
           showIcon
-          title="题库文件分析"
-          description="上传后将由后端识别题目边界、数量和类型，并在人工确认后创建分析任务；按题并发拆分将在下一阶段接入。"
+          title={mode === 'formatted_question_bank' ? '题库格式化文件分析' : 'AI辅助文件分析'}
+          description={mode === 'formatted_question_bank'
+            ? '压缩包内放置 question-bank.json、metadata.json 或对应 TXT 文件，填写题目类型、数量、目标和目录；工具流将按类型自动分配到代码审计、逆向或渗透模块。'
+            : '上传题库压缩包后，由工具流和模型辅助识别题目边界、数量与类型，再确认模块分配。'}
         />}
         <Form.Item name="objective" label="任务目标" rules={[{ required: true }, { min: 3 }]}>
           <Input.TextArea rows={3} maxLength={10000} showCount />
@@ -341,22 +281,23 @@ export function TaskModal({ open, onClose, onCreated }) {
           </Form.Item>
         </div>
         <Form.Item name="constraints" label="约束"><Input.TextArea rows={2} /></Form.Item>
-        <Form.Item label={mode === 'question_bank' ? '题库材料' : '输入材料'}>
-          <Dragger multiple fileList={files} beforeUpload={() => false} onChange={({ fileList }) => setFiles(fileList)}>
+        <Form.Item label={mode === 'single_file' ? '单个输入文件' : '题库材料'}>
+          <Dragger multiple={mode !== 'single_file'} fileList={files} beforeUpload={() => false} onChange={({ fileList }) => setFiles(fileList)}>
             <InboxOutlined className="upload-icon" />
-            <p>{mode === 'question_bank' ? '点击或拖放题库文件到此处' : '点击或拖放文件到此处'}</p>
-            {mode === 'question_bank' && <p className="ant-upload-hint">建议使用带 Manifest 或按题目分目录组织的 ZIP 压缩包</p>}
+            <p>{mode === 'single_file' ? '点击或拖放一个文件到此处' : '点击或拖放题库压缩包到此处'}</p>
+            {mode === 'ai_assisted' && <p className="ant-upload-hint">支持按题目分目录组织的 ZIP 压缩包</p>}
+            {mode === 'formatted_question_bank' && <p className="ant-upload-hint">ZIP 内需包含 JSON 或 TXT 格式化元数据文件</p>}
           </Dragger>
         </Form.Item>
-        {mode !== 'question_bank' && <div className="material-source-grid">
-          <Form.Item label="靶场网址（可选）" extra="仅提交地址，不会由 SecMind 自动访问未授权目标">
+        {mode === 'single_file' && <div className="material-source-grid">
+          <Form.Item label="靶场网址（可选）" extra="仅提交地址，不会由 安全智能体平台 自动访问未授权目标">
             <Input value={targetUrl} onChange={(event) => setTargetUrl(event.target.value)} placeholder="https://target.lab.local/" inputMode="url" />
           </Form.Item>
           <Form.Item label="文本材料（可选）" extra="可粘贴题目说明、接口信息或补充线索">
             <Input.TextArea value={textMaterial} onChange={(event) => setTextMaterial(event.target.value)} rows={3} maxLength={20000} showCount placeholder="粘贴题目文本或测试说明" />
           </Form.Item>
         </div>}
-      </>}
+      </>
     </Form>}
     {error && <Alert className="task-modal-feedback" type="error" showIcon title="任务没有提交" description={error} closable onClose={() => setError('')} />}
     {progress && <Alert className="task-modal-feedback" type="info" showIcon title={progress} />}
@@ -453,9 +394,14 @@ function QuestionBankInspection({ inspection, onChange }) {
     <Alert
       type={inspection.status === 'needs_manual_mapping' || stats.ambiguous_question_count ? 'warning' : 'success'}
       showIcon
-      title={inspection.status === 'needs_manual_mapping' ? '需要人工映射题目目录' : `模型建议 ${stats.detected_question_count || inspection.questions.length} 道候选题目`}
-      description="请逐项确认题目根目录和类型。根目录必须从安全展开后的真实目录中选择，不能互相包含。"
+      title={inspection.status === 'needs_manual_mapping' ? '需要人工映射题目目录' : inspection.analysis_mode === 'formatted' ? `格式化文件已声明 ${stats.detected_question_count || inspection.questions.length} 道题目` : `模型建议 ${stats.detected_question_count || inspection.questions.length} 道候选题目`}
+      description={inspection.analysis_mode === 'formatted' ? '已读取压缩包内的 JSON/TXT 基础信息，并根据题型生成模块分配计划；请确认目录和类型后创建任务。' : '请逐项确认题目根目录和类型。根目录必须从安全展开后的真实目录中选择，不能互相包含。'}
     />
+    {inspection.formatted_metadata && <div className="formatted-metadata-summary">
+      <Tag color="blue">元数据：{inspection.formatted_metadata.source_path}</Tag>
+      {inspection.formatted_metadata.target && <Tag>目标：{inspection.formatted_metadata.target}</Tag>}
+      {(inspection.dispatch_plan || []).map((item) => <Tag color="geekblue" key={item.module_route}>{item.module_label} {item.question_count} 题</Tag>)}
+    </div>}
     <Descriptions className="question-bank-statistics" size="small" column={3} bordered>
       <Descriptions.Item label="文件总数">{stats.total_file_count}</Descriptions.Item>
       <Descriptions.Item label="内层压缩包">{stats.nested_archive_count}</Descriptions.Item>
@@ -512,7 +458,7 @@ const INSPECTION_STAGE_LABELS = {
 const BOUNDARY_SOURCE_LABELS = {
   manifest: 'Manifest 明确声明', llm_assisted: '大模型辅助建议',
   manual_required: '需要人工映射', user_confirmed: '用户已确认',
-  legacy_invalidated: '旧版结果已失效', inventory_failed: '安全展开失败',
+  formatted_metadata: '格式化元数据声明', legacy_invalidated: '旧版结果已失效', inventory_failed: '安全展开失败',
 }
 
 const QUESTION_TYPE_LABELS = {

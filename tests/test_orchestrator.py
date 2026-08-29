@@ -4,11 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from secmind.guardrail import Guardrail
-from secmind.ledger import LedgerStore
-from secmind.llm import QwenGateway
-from secmind.orchestrator import SecMindOrchestrator
-from secmind.schemas import (
+from security_agent.guardrail import Guardrail
+from security_agent.ledger import LedgerStore
+from security_agent.llm import ModelGateway
+from security_agent.orchestrator import SecurityOrchestrator
+from security_agent.schemas import (
     ApprovalDecision,
     ApprovalResponse,
     AttachmentRef,
@@ -21,7 +21,7 @@ from secmind.schemas import (
     ToolResult,
     ToolStatus,
 )
-from secmind.tools import BaseTool, ToolBroker, ToolRegistry, default_registry
+from security_agent.tools import BaseTool, ToolBroker, ToolRegistry, default_registry
 
 
 class ControlledAuditTool(BaseTool):
@@ -56,10 +56,10 @@ def controlled_orchestrator(settings, risk: RiskLevel, fail_once: bool = False):
     registry = ToolRegistry()
     tool = ControlledAuditTool(risk, fail_once)
     registry.register(tool)
-    orchestrator = SecMindOrchestrator(
+    orchestrator = SecurityOrchestrator(
         settings,
         ledger,
-        QwenGateway(settings),
+        ModelGateway(settings),
         ToolBroker(registry, Guardrail()),
     )
     return orchestrator, ledger, tool
@@ -72,10 +72,10 @@ async def test_code_audit_end_to_end(settings, tmp_path: Path) -> None:
         "import subprocess\nsubprocess.Popen('echo unsafe', shell=True)\n", encoding="utf-8"
     )
     ledger = LedgerStore(settings.database_url)
-    orchestrator = SecMindOrchestrator(
+    orchestrator = SecurityOrchestrator(
         settings,
         ledger,
-        QwenGateway(settings),
+        ModelGateway(settings),
         ToolBroker(default_registry(), Guardrail()),
     )
     state = await orchestrator.start(

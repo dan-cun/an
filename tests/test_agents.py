@@ -4,9 +4,28 @@ from types import SimpleNamespace
 
 import pytest
 
-from secmind.agents import PlannerAgent, PlanOutput
-from secmind.llm import ModelCallMeta
-from secmind.schemas import AgentState, InputArtifact, PlanStep, RiskLevel, Scenario, TaskRequest
+from security_agent.agents import (
+    AnalysisOutput,
+    AnalystAgent,
+    PlannerAgent,
+    PlanOutput,
+    ReportOutput,
+    ReporterAgent,
+    RouteOutput,
+    TaskInterpreterAgent,
+)
+from security_agent.llm import ModelCallMeta
+from security_agent.schemas import (
+    AgentState,
+    Evidence,
+    InputArtifact,
+    PlanStep,
+    RiskLevel,
+    Scenario,
+    TaskRequest,
+    ToolResult,
+    ToolStatus,
+)
 
 
 class StubPlannerGateway:
@@ -22,6 +41,44 @@ class StubPlannerGateway:
             duration_ms=1,
             used_fallback=False,
             usage={},
+        )
+
+
+class RecordingGateway:
+    def __init__(self) -> None:
+        self.settings = SimpleNamespace(demo_mode=False)
+        self.calls: list[dict] = []
+
+    async def structured(self, **kwargs):
+        self.calls.append(kwargs)
+        output_model = kwargs["output_model"]
+        if output_model is RouteOutput:
+            output = RouteOutput(
+                primary_type="penetration",
+                confidence=0.96,
+                evidence=["模型识别到授权靶场"],
+                rationale_summary="题目包含授权靶场地址，应交由渗透模块处理。",
+            )
+        elif output_model is PlanOutput:
+            output = PlanOutput(
+                steps=[plan_step("model-step", ["penetration_module"], {"target": "https://target.local"})],
+                rationale_summary="模型规划了一个受授权边界约束的渗透步骤。",
+            )
+        elif output_model is AnalysisOutput:
+            output = AnalysisOutput(summary="模型确认工具观测支持一个高风险问题。", findings=[])
+        elif output_model is ReportOutput:
+            output = ReportOutput(
+                executive_summary="模型生成的最终安全总结。", limitations=[], next_steps=["人工复核证据"]
+            )
+        else:  # pragma: no cover - protects the test double from silent misuse
+            raise AssertionError(output_model)
+        return output, ModelCallMeta(
+            model_id="test-model",
+            prompt_version=kwargs["prompt_version"],
+            response_sha256="response",
+            duration_ms=1,
+            used_fallback=False,
+            usage={"prompt_tokens": 10, "completion_tokens": 5},
         )
 
 
@@ -79,7 +136,7 @@ async def test_planner_removes_non_tool_post_processing_steps() -> None:
         ],
         rationale_summary="scan, analyze, then report",
     )
-    state = await PlannerAgent(StubPlannerGateway(output)).run(code_audit_state())  # type: ignore[arg-type]
+    state = await PlannerAgent(StubPlannerGateway(output)).run(code_audit_state())
 
     assert len(state.plan) == 1
     assert state.plan[0].step_id == "scan"
@@ -92,7 +149,7 @@ async def test_planner_falls_back_when_model_returns_no_known_tool() -> None:
         steps=[plan_step("invented", ["unknown_tool"])],
         rationale_summary="use an unavailable tool",
     )
-    state = await PlannerAgent(StubPlannerGateway(output)).run(code_audit_state())  # type: ignore[arg-type]
+    state = await PlannerAgent(StubPlannerGateway(output)).run(code_audit_state())
 
     assert len(state.plan) == 1
     assert state.plan[0].step_id == "audit-python-bandit"
@@ -112,7 +169,7 @@ async def test_planner_normalizes_target_file_to_bandit_target() -> None:
         ],
         rationale_summary="scan the uploaded file",
     )
-    state = await PlannerAgent(StubPlannerGateway(output)).run(code_audit_state())  # type: ignore[arg-type]
+    state = await PlannerAgent(StubPlannerGateway(output)).run(code_audit_state())
 
     assert state.plan[0].inputs == {"target": "vulnerable_app.py"}
     assert state.plan[0].risk_hint == RiskLevel.R1
@@ -124,6 +181,82 @@ async def test_planner_keeps_multi_file_case_as_one_audit_target() -> None:
         steps=[plan_step("scan", ["workspace_security_audit"], {"target": "T3S-CASE/artifact_01.og"})],
         rationale_summary="scan all registered case inputs",
     )
-    state = await PlannerAgent(StubPlannerGateway(output)).run(multi_artifact_state())  # type: ignore[arg-type]
+    state = await PlannerAgent(StubPlannerGateway(output)).run(multi_artifact_state())
 
     assert state.plan[0].inputs == {"target": "T3S-CASE"}
+
+
+@pytest.mark.asyncio
+async def test_interpreter_uses_model_and_passes_scope_and_material(tmp_path) -> None:
+    gateway = RecordingGateway()
+    material = tmp_path / "question.txt"
+    material.write_text("请对授权靶场执行端口枚举和 Web 漏洞验证。", encoding="utf-8")
+    state = AgentState(
+        run_id="route-model-test",
+        task=TaskRequest(
+            objective="分析上传题目",
+            attachments=[],
+            target_scope=["https://target.local"],
+        ),
+        workspace=str(tmp_path),
+        input_artifacts=[
+            InputArtifact(
+                original_name="question.txt",
+                relative_path="question.txt",
+                sha256="0" * 64,
+                size_bytes=30,
+                media_type="text/plain",
+            )
+        ],
+    )
+    result = await TaskInterpreterAgent(gateway).run(state)
+
+    assert result.module_route == "penetration"
+    assert result.scenario == Scenario.PENETRATION_TEST
+    assert result.budget.model_calls_used == 1
+    assert result.decisions[-1].model_id == "test-model"
+    prompt = gateway.calls[0]["user_prompt"]
+    assert "https://target.local" in prompt
+    assert "端口枚举" in prompt
+
+
+@pytest.mark.asyncio
+async def test_planner_uses_model_for_penetration() -> None:
+    gateway = RecordingGateway()
+    state = AgentState(
+        run_id="penetration-plan-model-test",
+        task=TaskRequest(objective="授权渗透测试", target_scope=["https://target.local"]),
+        scenario=Scenario.PENETRATION_TEST,
+        module_route="penetration",
+    )
+    result = await PlannerAgent(gateway).run(state)
+
+    assert result.plan[0].tool_candidates == ["penetration_module"]
+    assert result.plan[0].inputs == {"target": "https://target.local"}
+    assert result.budget.model_calls_used == 1
+    assert result.decisions[-1].model_id == "test-model"
+
+
+@pytest.mark.asyncio
+async def test_analyst_and_reporter_use_model_summaries() -> None:
+    gateway = RecordingGateway()
+    evidence = Evidence(
+        evidence_id="ev-1", source="test", summary="受控观测", artifact_ref="input.txt", sha256="1" * 64
+    )
+    state = AgentState(
+        run_id="summary-model-test",
+        task=TaskRequest(objective="代码审计"),
+        scenario=Scenario.CODE_AUDIT,
+        module_route="code_audit",
+        observations=[
+            ToolResult(status=ToolStatus.SUCCESS, summary="工具完成", evidence=[evidence], data={"findings": []})
+        ],
+    )
+
+    state = await AnalystAgent(gateway).run(state)
+    state = await ReporterAgent(gateway).run(state)
+
+    assert state.budget.model_calls_used == 2
+    assert state.report is not None
+    assert state.report.executive_summary == "模型生成的最终安全总结。"
+    assert any(item.model_id == "test-model" for item in state.decisions)

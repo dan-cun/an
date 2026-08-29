@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from secmind.ingest import IngestError, InputIngestor
-from secmind.schemas import AttachmentRef
+from security_agent.ingest import IngestError, InputIngestor
+from security_agent.schemas import AttachmentRef
 
 
 def test_ingest_file_and_hash(settings) -> None:

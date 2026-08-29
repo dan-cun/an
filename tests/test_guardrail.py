@@ -1,5 +1,5 @@
-from secmind.guardrail import Guardrail, GuardrailAction
-from secmind.schemas import RiskLevel, Scenario, ToolManifest
+from security_agent.guardrail import Guardrail, GuardrailAction
+from security_agent.schemas import RiskLevel, Scenario, ToolManifest
 
 
 def manifest(risk: RiskLevel) -> ToolManifest:
