@@ -1,4 +1,6 @@
-const standaloneCockpit = window.location.pathname.startsWith('/cockpit') || window.location.pathname === '/dashboard'
+const standaloneCockpit = window.location.pathname === '/'
+  || window.location.pathname.startsWith('/cockpit')
+  || window.location.pathname === '/dashboard'
 
 if (standaloneCockpit) {
   import('./cockpit-entry.jsx')
