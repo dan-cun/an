@@ -46,7 +46,14 @@ class Guardrail:
                 ("POL-R3-DENY",),
                 "Destructive, credential, persistence, or out-of-scope actions are prohibited.",
             )
-        if autonomy_policy == "approval_all" or manifest.risk_level == RiskLevel.R2:
+        # ``automatic`` is an explicit operator choice for the controlled test
+        # environment: allow bounded R2 adapters (including penetration_module)
+        # to run without pausing at the approval node.  ``graded`` keeps the
+        # existing R2 human-in-the-loop behavior, while ``approval_all`` always
+        # pauses.  R3 and blocked terms were denied above and cannot be bypassed.
+        if autonomy_policy == "approval_all" or (
+            manifest.risk_level == RiskLevel.R2 and autonomy_policy != "automatic"
+        ):
             return GuardrailDecision(
                 GuardrailAction.REQUIRE_APPROVAL,
                 max(manifest.risk_level, RiskLevel.R2),

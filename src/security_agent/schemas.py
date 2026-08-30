@@ -398,6 +398,10 @@ class ToolContext(BaseModel):
     target_scope: list[str] = Field(default_factory=list)
     input_artifacts: list[InputArtifact] = Field(default_factory=list)
     mcp_generated_root: str | None = None
+    # External modules such as Cairn execute asynchronously. The orchestrator
+    # supplies these bounded polling settings to the verification gate.
+    module_poll_interval_seconds: float = Field(default=3.0, ge=0.2, le=60.0)
+    module_poll_timeout_seconds: float = Field(default=540.0, ge=1.0, le=7200.0)
 
 
 class ToolResult(BaseModel):
@@ -447,6 +451,8 @@ class AgentState(BaseModel):
     budget: BudgetState = Field(default_factory=BudgetState)
     report: AgentReport | None = None
     last_error: str | None = None
+    # Runtime state for an asynchronous external adapter (currently Cairn).
+    external_execution: dict[str, Any] = Field(default_factory=dict)
     started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -475,4 +481,5 @@ class RunSummary(BaseModel):
     total_steps: int
     pending_approval: ApprovalRequest | None = None
     last_error: str | None = None
+    external_execution: dict[str, Any] = Field(default_factory=dict)
     budget: BudgetState = Field(default_factory=BudgetState)

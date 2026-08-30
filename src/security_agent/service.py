@@ -126,6 +126,7 @@ class RunService:
             total_steps=len(state.plan),
             pending_approval=state.pending_approval,
             last_error=state.last_error,
+            external_execution=state.external_execution,
             budget=state.budget,
         )
 
@@ -142,6 +143,7 @@ class RunService:
                 total_steps=len(state.plan),
                 pending_approval=state.pending_approval,
                 last_error=state.last_error,
+                external_execution=state.external_execution,
                 budget=state.budget,
             )
             for state in self.ledger.list_states(limit)

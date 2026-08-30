@@ -11,6 +11,7 @@ from security_agent.orchestrator import SecurityOrchestrator
 from security_agent.schemas import (
     ApprovalDecision,
     ApprovalResponse,
+    AgentState,
     AttachmentRef,
     RiskLevel,
     RunStatus,
@@ -20,6 +21,7 @@ from security_agent.schemas import (
     ToolManifest,
     ToolResult,
     ToolStatus,
+    PlanStep,
 )
 from security_agent.tools import BaseTool, ToolBroker, ToolRegistry, default_registry
 
@@ -146,3 +148,51 @@ async def test_unsupported_scenario_produces_partial_report(settings) -> None:
     assert state.status == RunStatus.PARTIAL
     assert state.report is not None
     assert state.report.limitations
+
+
+@pytest.mark.asyncio
+async def test_penetration_verification_waits_for_external_terminal(monkeypatch, settings) -> None:
+    settings.prepare_directories()
+    ledger = LedgerStore(settings.database_url)
+    registry = ToolRegistry()
+    registry.register(ControlledAuditTool(RiskLevel.R1))
+    orchestrator = SecurityOrchestrator(settings, ledger, ModelGateway(settings), ToolBroker(registry, Guardrail()))
+    state = AgentState(
+        run_id="penetration-wait-gate",
+        task=TaskRequest(objective="获取授权靶场 flag"),
+        scenario=Scenario.PENETRATION_TEST,
+        module_route="penetration",
+        status=RunStatus.RUNNING,
+        plan=[PlanStep(step_id="penetrate", objective="执行", agent_role="analyst", tool_candidates=["workspace_security_audit"], inputs={})],
+        observations=[ToolResult(status=ToolStatus.SUCCESS, data={"project_id": "proj-1", "adapter": "penetration_engine"})],
+    )
+    calls = []
+
+    async def fake_wait(*_args, on_update=None, **_kwargs):
+        calls.append(True)
+        if on_update:
+            await on_update({"project_id": "proj-1", "status": "running", "terminal": False, "objective_reached": False})
+        return {
+            "status": "completed",
+            "terminal": True,
+            "objective_reached": True,
+            "failed": False,
+            "project_id": "proj-1",
+            "fact_count": 2,
+            "intent_count": 1,
+            "detail": {
+                "project": {"id": "proj-1", "status": "completed"},
+                "facts": [{"id": "flag", "description": "flag{verified}"}],
+                "intents": [{"id": "goal-intent", "to": "goal", "concluded_at": "now"}],
+            },
+        }
+
+    monkeypatch.setattr("security_agent.orchestrator.wait_for_project_terminal", fake_wait)
+    result = await orchestrator._verify({"agent": state.model_dump(mode="json")})
+    updated = result["agent"]
+    assert calls == [True]
+    assert updated["status"] == RunStatus.RUNNING.value
+    assert updated["external_execution"]["status"] == "completed"
+    assert updated["external_execution"]["objective_reached"] is True
+    assert updated["external_execution"]["exploration_complete"] is True
+    assert updated["observations"][-1]["data"]["external_facts"][0]["description"] == "flag{verified}"

@@ -12,12 +12,9 @@ import {
   ReloadOutlined,
   RobotOutlined,
 } from '@ant-design/icons'
-import { Alert, Button, Empty, Select, Spin, Tag, Tooltip } from 'antd'
+import { Alert, Button, Empty, Modal, Spin, Tag, Tooltip } from 'antd'
 import cytoscape from 'cytoscape'
-import dagre from 'cytoscape-dagre'
 import { getPenetrationGraph } from '../api.js'
-
-cytoscape.use(dagre)
 
 const TYPE_META = {
   origin: { label: '起点', color: '#8da0ae', icon: <AimOutlined /> },
@@ -38,6 +35,47 @@ function textLabel(node) {
   const content = String(node.label || node.raw_id || node.id).replace(/\s+/g, ' ').trim()
   const shortened = content.length > 74 ? `${content.slice(0, 72)}…` : content
   return `${meta.label}  ·  ${node.raw_id || ''}\n${shortened}`
+}
+
+// FRONTEND CUSTOMIZATION: derive a bounded node size from the AI-produced text.
+// This keeps long facts readable without allowing one node to break the LR graph.
+function nodeDimensions(node) {
+  const text = textLabel(node)
+  const width = Math.max(220, Math.min(360, 220 + Math.ceil(text.length / 24) * 12))
+  // Count wrapped lines conservatively (Chinese text is wider than ASCII) and
+  // reserve vertical space for the type/id line. This prevents Cytoscape from
+  // painting labels outside the rounded rectangle.
+  const lines = Math.max(3, Math.min(11, text.split('\n').reduce((total, line) => total + Math.ceil(line.length / 24), 0)))
+  const height = Math.max(112, Math.min(230, 56 + lines * 19))
+  return { nodeWidth: width, nodeHeight: height, textMaxWidth: width - 28 }
+}
+
+// FRONTEND CUSTOMIZATION: fixed semantic columns keep the blackboard readable
+// even when the backend adds branching intents or multiple facts. Nodes in one
+// column are stacked with a calculated vertical gap, so cards never overlap.
+const STAGE_BY_TYPE = { origin: 0, hint: 0, intent: 1, hypothesis: 1, worker: 2, fact: 3, vulnerability: 3, execute: 2, goal: 4 }
+const EDGE_LABELS = { 'intent-chain': '意图链', 'worker-assignment': '执行', 'worker-output': '产出', produces: '产出', hypothesis: '猜想', hint: '提示' }
+function stagedPositions(nodes) {
+  const columns = new Map()
+  nodes.forEach((node) => {
+    const stage = STAGE_BY_TYPE[node.type] ?? 2
+    if (!columns.has(stage)) columns.set(stage, [])
+    columns.get(stage).push(node)
+  })
+  const positions = {}
+  const columnGap = 430
+  for (const [stage, column] of columns.entries()) {
+    const ordered = [...column].sort((a, b) => String(a.raw_id || a.id).localeCompare(String(b.raw_id || b.id)))
+    const heights = ordered.map((node) => node.nodeHeight || 150)
+    const total = heights.reduce((sum, height) => sum + height, 0) + Math.max(0, ordered.length - 1) * 86
+    let y = -total / 2
+    ordered.forEach((node, index) => {
+      const height = heights[index]
+      positions[node.id] = { x: stage * columnGap, y: y + height / 2 }
+      y += height + 86
+    })
+  }
+  return positions
 }
 
 function fallbackGraph(run, events) {
@@ -64,15 +102,20 @@ function fallbackGraph(run, events) {
 }
 
 function graphElements(graph) {
-  return [
-    ...(graph.nodes || []).map((node) => ({
+  const nodeElements = (graph.nodes || []).map((node) => ({
       group: 'nodes',
-      data: { ...node, displayLabel: textLabel(node) },
+      data: { ...node, ...nodeDimensions(node), displayLabel: textLabel(node) },
       classes: `type-${node.type} status-${node.status || 'waiting'}`,
-    })),
+    }))
+  const positions = stagedPositions(nodeElements.map((element) => element.data))
+  nodeElements.forEach((element) => { element.position = positions[element.data.id] })
+  return [
+    ...nodeElements,
     ...(graph.edges || []).map((edge) => ({
       group: 'edges',
-      data: edge,
+      // Keep relationship captions short; full evidence remains in the
+      // double-click node modal instead of colliding with lines.
+      data: { ...edge, label: EDGE_LABELS[edge.type] || String(edge.label || '').slice(0, 12) },
       classes: `edge-${edge.type} status-${edge.status || 'waiting'}`,
     })),
   ]
@@ -82,8 +125,8 @@ const CY_STYLE = [
   {
     selector: 'node',
     style: {
-      width: 210,
-      height: 96,
+      width: 'data(nodeWidth)',
+      height: 'data(nodeHeight)',
       shape: 'round-rectangle',
       'background-color': '#151c21',
       'border-width': 1.5,
@@ -94,7 +137,7 @@ const CY_STYLE = [
       'font-size': 11,
       'font-weight': 600,
       'text-wrap': 'wrap',
-      'text-max-width': 180,
+      'text-max-width': 'data(textMaxWidth)',
       'text-valign': 'center',
       'text-halign': 'center',
       'line-height': 1.45,
@@ -138,7 +181,10 @@ const CY_STYLE = [
       'target-arrow-color': '#596d78',
       'target-arrow-shape': 'triangle',
       'arrow-scale': 0.9,
-      'curve-style': 'bezier',
+      // Orthogonal routing keeps arrows out of node bodies in dense stages.
+      'curve-style': 'taxi',
+      'taxi-direction': 'horizontal',
+      'taxi-turn-min-distance': 28,
       label: 'data(label)',
       color: '#718690',
       'font-size': 8,
@@ -164,11 +210,14 @@ export function BlackboardGraph({ run, events = [] }) {
   const cyRef = useRef(null)
   const projectRef = useRef(null)
   const [remoteGraph, setRemoteGraph] = useState(null)
-  const [selectedNode, setSelectedNode] = useState(null)
-  const [direction, setDirection] = useState('LR')
+  const [modalNode, setModalNode] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
   const penetration = run?.module_route === 'penetration'
+  const latestExplorationSequence = useMemo(
+    () => [...events].reverse().find((event) => ['penetration.status', 'exploration.updated', 'exploration.completed'].includes(event.event_type))?.sequence || 0,
+    [events],
+  )
 
   const refresh = useCallback(async (quiet = false) => {
     if (!penetration || !run?.run_id) return
@@ -186,13 +235,20 @@ export function BlackboardGraph({ run, events = [] }) {
 
   useEffect(() => {
     setRemoteGraph(null)
-    setSelectedNode(null)
+    setModalNode(null)
     setError('')
     if (!penetration || !run?.run_id) return undefined
     refresh()
     const timer = window.setInterval(() => refresh(true), 3000)
     return () => window.clearInterval(timer)
   }, [penetration, run?.run_id, refresh])
+
+  // Event-driven refresh removes the visual lag caused by waiting for the
+  // three-second timer.  The timer remains as a recovery path for missed
+  // events or a temporarily unavailable Cairn response.
+  useEffect(() => {
+    if (penetration && latestExplorationSequence) refresh(true)
+  }, [penetration, latestExplorationSequence, refresh])
 
   const graph = useMemo(
     () => penetration ? (remoteGraph || { nodes: [], edges: [] }) : fallbackGraph(run, events),
@@ -203,17 +259,15 @@ export function BlackboardGraph({ run, events = [] }) {
     const cy = cyRef.current
     if (!cy || cy.nodes().empty()) return
     cy.layout({
-      name: 'dagre',
-      rankDir: direction,
-      nodeSep: 32,
-      rankSep: 80,
-      edgeSep: 18,
+      // FRONTEND CUSTOMIZATION: semantic stage positions are supplied in
+      // graphElements; preset layout preserves those columns and spacing.
+      name: 'preset',
       padding: 80,
       animate: false,
       fit: false,
     }).run()
     if (fit) cy.fit(cy.elements(), 72)
-  }, [direction])
+  }, [])
 
   useEffect(() => {
     if (!containerRef.current || cyRef.current) return undefined
@@ -227,8 +281,13 @@ export function BlackboardGraph({ run, events = [] }) {
       selectionType: 'single',
       autoungrabify: false,
     })
-    cy.on('tap', 'node', (event) => setSelectedNode({ ...event.target.data() }))
-    cy.on('tap', (event) => { if (event.target === cy) setSelectedNode(null) })
+    cy.on('tap', 'node', (event) => {
+      cy.elements().unselect()
+      event.target.select()
+    })
+    // FRONTEND CUSTOMIZATION: node content is intentionally shown on double-click.
+    cy.on('dbltap', 'node', (event) => setModalNode({ ...event.target.data() }))
+    cy.on('tap', (event) => { if (event.target === cy) cy.elements().unselect() })
     cyRef.current = cy
     return () => { cy.destroy(); cyRef.current = null }
   }, [])
@@ -238,21 +297,14 @@ export function BlackboardGraph({ run, events = [] }) {
     if (!cy) return
     const nextProject = remoteGraph?.project_id || run?.run_id || 'fallback'
     const firstForProject = projectRef.current !== nextProject
-    const selectedId = selectedNode?.id
     cy.batch(() => {
       cy.elements().remove()
       cy.add(graphElements(graph))
     })
     runLayout(firstForProject)
-    if (selectedId) {
-      const selected = cy.getElementById(selectedId)
-      if (selected.nonempty()) selected.select()
-      else setSelectedNode(null)
-    }
     projectRef.current = nextProject
+    setModalNode(null)
   }, [graph, remoteGraph?.project_id, run?.run_id, runLayout])
-
-  useEffect(() => { runLayout(true) }, [direction, runLayout])
 
   const zoom = (factor) => {
     const cy = cyRef.current
@@ -263,7 +315,7 @@ export function BlackboardGraph({ run, events = [] }) {
 
   if (!run) return <div className="blackboard-empty"><Empty description="选择任务后显示探索路径" /></div>
 
-  const currentMeta = selectedNode ? (TYPE_META[selectedNode.type] || TYPE_META.fact) : null
+  const currentMeta = modalNode ? (TYPE_META[modalNode.type] || TYPE_META.fact) : null
   const linked = !penetration || remoteGraph?.linked
   return <div className="blackboard-view penetration-blackboard">
     <header className="blackboard-header">
@@ -275,7 +327,7 @@ export function BlackboardGraph({ run, events = [] }) {
     </header>
     <div className="blackboard-type-legend">
       {Object.entries(TYPE_META).filter(([type]) => type !== 'execute' || !penetration).map(([type, meta]) => <span key={type}><i style={{ background: meta.color }} />{meta.label}</span>)}
-      <em>滚轮缩放 · 拖拽平移 · 点击节点查看 AI 依据</em>
+      <em>滚轮缩放 · 拖拽平移 · 双击节点查看 AI 依据</em>
     </div>
     {error && <Alert className="blackboard-error" type="warning" showIcon title="实时黑板暂不可用" description={error} action={<Button size="small" onClick={() => refresh()}>重试</Button>} />}
     <div className="blackboard-graph-shell">
@@ -283,7 +335,7 @@ export function BlackboardGraph({ run, events = [] }) {
         <Tooltip title="缩小"><Button aria-label="缩小黑板" icon={<MinusOutlined />} onClick={() => zoom(0.82)} /></Tooltip>
         <Tooltip title="放大"><Button aria-label="放大黑板" icon={<PlusOutlined />} onClick={() => zoom(1.22)} /></Tooltip>
         <Tooltip title="适配窗口"><Button aria-label="适配黑板到窗口" icon={<ExpandOutlined />} onClick={() => cyRef.current?.fit(cyRef.current.elements(), 72)} /></Tooltip>
-        <Select aria-label="黑板布局方向" value={direction} onChange={setDirection} options={[{ value: 'LR', label: '从左到右' }, { value: 'TB', label: '从上到下' }]} />
+        <span className="blackboard-layout-badge">从左到右</span>
         {penetration && <Tooltip title="立即同步"><Button aria-label="刷新黑板" loading={refreshing} icon={<ReloadOutlined />} onClick={() => refresh()} /></Tooltip>}
       </div>
       <div className="blackboard-grid-lines" />
@@ -291,19 +343,25 @@ export function BlackboardGraph({ run, events = [] }) {
       {penetration && refreshing && !remoteGraph && <div className="blackboard-loading"><Spin /><span>正在读取 AI 黑板…</span></div>}
       {penetration && remoteGraph && !remoteGraph.linked && !refreshing && <div className="blackboard-loading"><RobotOutlined /><span>任务正在提交，收到 project_id 后将自动绘图</span></div>}
       {linked && graph.nodes?.length === 0 && !refreshing && <div className="blackboard-loading"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="黑板暂无节点" /></div>}
-      <aside className={`blackboard-node-detail ${selectedNode ? 'is-open' : ''}`}>
-        {selectedNode ? <>
-          <div className="node-detail-heading"><i style={{ color: currentMeta.color }}>{currentMeta.icon}</i><span><small>NODE DETAIL</small><b>{currentMeta.label}</b></span><Tag>{selectedNode.raw_id}</Tag></div>
-          <p>{selectedNode.description || selectedNode.label}</p>
+      <Modal
+        open={Boolean(modalNode)}
+        title={modalNode && currentMeta ? <span className="node-modal-title"><i style={{ color: currentMeta.color }}>{currentMeta.icon}</i><span>{currentMeta.label}</span><Tag>{modalNode.raw_id}</Tag></span> : null}
+        footer={null}
+        onCancel={() => setModalNode(null)}
+        width={560}
+        centered
+      >
+        {modalNode && <div className="node-modal-content">
+          <p>{modalNode.description || modalNode.label}</p>
           <dl>
-            <div><dt>状态</dt><dd>{STATUS_LABELS[selectedNode.status] || selectedNode.status}</dd></div>
-            <div><dt>来源</dt><dd>{selectedNode.ai_generated ? 'AI 思考产出' : '题目/操作员输入'}</dd></div>
-            {selectedNode.creator && <div><dt>创建者</dt><dd>{selectedNode.creator}</dd></div>}
-            {selectedNode.worker && <div><dt>执行 Worker</dt><dd>{selectedNode.worker}</dd></div>}
-            {selectedNode.concluded_at && <div><dt>结论时间</dt><dd>{new Date(selectedNode.concluded_at).toLocaleString('zh-CN')}</dd></div>}
+            <div><dt>状态</dt><dd>{STATUS_LABELS[modalNode.status] || modalNode.status || '未知'}</dd></div>
+            <div><dt>来源</dt><dd>{modalNode.ai_generated ? 'AI 思考产出' : '题目/操作员输入'}</dd></div>
+            {modalNode.creator && <div><dt>创建者</dt><dd>{modalNode.creator}</dd></div>}
+            {modalNode.worker && <div><dt>执行 Worker</dt><dd>{modalNode.worker}</dd></div>}
+            {modalNode.concluded_at && <div><dt>结论时间</dt><dd>{new Date(modalNode.concluded_at).toLocaleString('zh-CN')}</dd></div>}
           </dl>
-        </> : <div className="node-detail-empty"><BranchesOutlined /><b>选择一个节点</b><span>查看事实来源、AI 意图、执行状态与结论时间</span></div>}
-      </aside>
+        </div>}
+      </Modal>
     </div>
     <footer className="blackboard-footer">
       <span><b>{graph.nodes?.length || 0}</b> 节点</span><span><b>{graph.edges?.length || 0}</b> 关系</span>

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import re
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -558,7 +559,18 @@ class ReporterAgent(BaseAgent):
     prompt_version = "report-v2"
 
     async def run(self, state: AgentState, stream_observer: StreamObserver | None = None) -> AgentState:
-        successful = any(item.status == ToolStatus.SUCCESS for item in state.observations)
+        def is_successful(item: Any) -> bool:
+            if item.status != ToolStatus.SUCCESS:
+                return False
+            if state.module_route != "penetration":
+                return True
+            # For asynchronous Cairn work, adapter submission is not completion.
+            return (
+                item.data.get("external_status") in {"completed", "complete", "succeeded", "success"}
+                and item.data.get("objective_reached") is True
+            )
+
+        successful = any(is_successful(item) for item in state.observations)
         if state.status in {RunStatus.DENIED, RunStatus.FAILED}:
             final_status = state.status
         elif not successful:
@@ -572,8 +584,24 @@ class ReporterAgent(BaseAgent):
             limitations.append("未提供输入材料，工作区中可能没有可分析的题目内容。")
         if state.last_error:
             limitations.append(state.last_error)
+        external_facts: list[dict[str, Any]] = []
+        if state.module_route == "penetration":
+            for observation in reversed(state.observations):
+                values = observation.data.get("external_facts")
+                if isinstance(values, list):
+                    external_facts = [item for item in values if isinstance(item, dict)]
+                    if external_facts:
+                        break
+        flag_values = []
+        for fact in external_facts:
+            description = str(fact.get("description") or fact.get("content") or "")
+            flag_values.extend(re.findall(r"(?i)flag\{[^}\r\n]{1,256}\}", description))
+        external_suffix = ""
+        if flag_values:
+            external_suffix = f" 已验证目标输出：{', '.join(dict.fromkeys(flag_values))}。"
         fallback_summary = (
-            f"{state.module_route} 模块完成分析，共发现 {len(state.findings)} 个安全问题，并由 {len(state.evidence)} 条证据记录支持。"
+            f"{state.module_route} 模块完成分析，共发现 {len(state.findings)} 个安全问题，并由 "
+            f"{len(state.evidence)} 条证据记录支持。{external_suffix}"
             if successful
             else "任务结束，但没有获得成功的安全工具观测结果。"
         )
@@ -586,6 +614,8 @@ class ReporterAgent(BaseAgent):
                     system_prompt=(
                         "你是安全报告智能体。根据已验证输入、工具观测、Finding 和 Evidence 生成中文总结；"
                         "严禁危害系统与本机的安全；充分发挥自主归纳能力，不得声称未验证的成功，只返回 Schema JSON。"
+                        "对于渗透任务，必须等待探索路径进入终态后再下结论；若 external_facts 中存在 flag，"
+                        "须在 executive_summary 中原样展示；若没有明确 flag 证据，必须明确写未获取到 flag，不能猜测。"
                     ),
                     user_prompt=(
                         f"模块：{state.module_route}\n运行状态：{final_status.value}\n{_module_safety_guidance(state)}\n{_material_context(state)}\n"

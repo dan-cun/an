@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from security_agent.penetration_integration import normalize_penetration_graph
+import pytest
+
+from security_agent.penetration_integration import (
+    evaluate_project_completion,
+    normalize_penetration_graph,
+    wait_for_project_terminal,
+)
 
 
 def test_normalize_penetration_graph_preserves_ai_fact_intent_semantics() -> None:
@@ -87,3 +93,64 @@ def test_normalize_penetration_graph_preserves_ai_fact_intent_semantics() -> Non
     assert ("fact:f001", "intent:i002", "hypothesis") in edges
     assert graph["counts"]["vulnerability"] == 1
     assert graph["counts"]["worker"] == 2
+
+
+def _detail(status: str, *, goal: bool = False) -> dict:
+    intents = [{"id": "i1", "from": ["origin"], "to": "goal", "concluded_at": "now"}] if goal else []
+    return {"project": {"id": "proj-1", "status": status}, "facts": [], "intents": intents, "hints": []}
+
+
+def test_project_completed_requires_concluded_goal_intent() -> None:
+    assert evaluate_project_completion(_detail("completed"))["objective_reached"] is False
+    decision = evaluate_project_completion(_detail("completed", goal=True))
+    assert decision["terminal"] is True
+    assert decision["objective_reached"] is True
+
+
+@pytest.mark.asyncio
+async def test_wait_for_project_terminal_polls_until_delayed_completion(monkeypatch) -> None:
+    responses = iter([_detail("running"), _detail("running"), _detail("completed", goal=True)])
+
+    async def fake_get(_base_url, _path, _timeout=None, **_kwargs):
+        return next(responses)
+
+    updates = []
+    monkeypatch.setattr("security_agent.penetration_integration.penetration_get", fake_get)
+    result = await wait_for_project_terminal(
+        "http://cairn.test",
+        "proj-1",
+        timeout_seconds=1,
+        interval_seconds=0.01,
+        on_update=updates.append,
+    )
+    assert result["status"] == "completed"
+    assert result["objective_reached"] is True
+    assert len(updates) == 3
+
+
+@pytest.mark.asyncio
+async def test_wait_for_project_terminal_retries_transient_poll_errors(monkeypatch) -> None:
+    responses = iter([RuntimeError("temporary"), _detail("completed", goal=True)])
+
+    async def fake_get(_base_url, _path, _timeout=None, **_kwargs):
+        item = next(responses)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    monkeypatch.setattr("security_agent.penetration_integration.penetration_get", fake_get)
+    result = await wait_for_project_terminal("http://cairn.test", "proj-1", timeout_seconds=1, interval_seconds=0.01)
+    assert result["status"] == "completed"
+    assert result["objective_reached"] is True
+
+
+@pytest.mark.asyncio
+async def test_wait_for_project_terminal_times_out_without_false_success(monkeypatch) -> None:
+    async def fake_get(_base_url, _path, _timeout=None, **_kwargs):
+        return _detail("running")
+
+    monkeypatch.setattr("security_agent.penetration_integration.penetration_get", fake_get)
+    result = await wait_for_project_terminal("http://cairn.test", "proj-1", timeout_seconds=0.02, interval_seconds=0.01)
+    assert result["status"] == "timeout"
+    assert result["objective_reached"] is False
+    assert result["terminal"] is True

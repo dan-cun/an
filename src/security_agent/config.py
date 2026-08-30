@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     reverse_base_url: str = "http://127.0.0.1:8002"
     penetration_base_url: str = "http://127.0.0.1:8000"
     module_timeout_seconds: float = Field(default=20.0, ge=1, le=300)
+    penetration_poll_interval_seconds: float = Field(default=3.0, ge=0.2, le=60.0)
+    penetration_poll_timeout_seconds: float = Field(default=540.0, ge=1.0, le=7200.0)
 
     max_steps: int = Field(default=12, ge=1, le=100)
     max_tool_calls: int = Field(default=12, ge=1, le=100)

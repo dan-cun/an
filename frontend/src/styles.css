@@ -164,14 +164,14 @@ button, input, textarea, select { font: inherit; }
 .blackboard-error { margin: 10px 12px 0; }
 .blackboard-graph-shell { position: relative; min-height: 575px; flex: 1; overflow: hidden; background: radial-gradient(circle at 43% 45%, rgba(39,81,97,.10), transparent 42%), #070c0f; }
 .blackboard-graph-shell > .blackboard-grid-lines { pointer-events: none; mask-image: radial-gradient(circle at 43% 48%, black, transparent 88%); }
-.blackboard-cytoscape { position: absolute; z-index: 1; inset: 0 306px 0 0; cursor: grab; }
+.blackboard-cytoscape { position: absolute; z-index: 1; inset: 0; cursor: grab; }
 .blackboard-cytoscape:active { cursor: grabbing; }
 .blackboard-toolbar { position: absolute; z-index: 5; top: 12px; left: 13px; display: flex; padding: 5px; align-items: center; gap: 5px; background: rgba(10,16,20,.92); border: 1px solid #27373f; border-radius: 8px; box-shadow: 0 8px 20px rgba(0,0,0,.26); backdrop-filter: blur(10px); }
 .blackboard-toolbar .ant-btn { width: 30px; height: 30px; padding: 0; color: #a6b6bc; background: #121a1f; border-color: #2a3a42; }
 .blackboard-toolbar .ant-btn:hover { color: #6cddff !important; border-color: #4ab9da !important; }
 .blackboard-toolbar .ant-select { width: 112px; }
 .blackboard-toolbar .ant-select-selector { height: 30px !important; background: #121a1f !important; border-color: #2a3a42 !important; font-size: 9px; }
-.blackboard-loading { position: absolute; z-index: 4; inset: 0 306px 0 0; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 10px; color: #63777f; background: rgba(7,12,15,.62); font-size: 10px; pointer-events: none; }
+.blackboard-loading { position: absolute; z-index: 4; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 10px; color: #63777f; background: rgba(7,12,15,.62); font-size: 10px; pointer-events: none; }
 .blackboard-loading > .anticon { color: #62d9ff; font-size: 24px; filter: drop-shadow(0 0 12px rgba(98,217,255,.45)); }
 .blackboard-node-detail { position: absolute; z-index: 3; top: 0; right: 0; bottom: 0; width: 306px; padding: 18px; overflow-y: auto; background: linear-gradient(180deg, rgba(15,23,28,.98), rgba(8,14,17,.98)); border-left: 1px solid #26353d; box-shadow: -12px 0 32px rgba(0,0,0,.2); }
 .node-detail-heading { display: grid; grid-template-columns: 34px minmax(0,1fr) auto; gap: 9px; align-items: center; padding-bottom: 15px; border-bottom: 1px solid rgba(132,177,194,.11); }
@@ -184,14 +184,12 @@ button, input, textarea, select { font: inherit; }
 .blackboard-footer { display: flex; min-height: 40px; padding: 8px 15px; align-items: center; gap: 14px; color: #52656d; background: #0a1014; border-top: 1px solid rgba(135,177,195,.09); font-size: 8px; }.blackboard-footer span b { color: #86a0aa; font-size: 10px; }.blackboard-footer em { margin-left: auto; color: #4d6068; font-style: normal; text-align: right; }
 
 @media (max-width: 1100px) {
-  .blackboard-cytoscape, .blackboard-loading { right: 250px; }
   .blackboard-node-detail { width: 250px; }
 }
 @media (max-width: 760px) {
   .conversation-panel.is-graph { grid-column: auto; }
   .blackboard-type-legend em { width: 100%; margin-left: 0; }
   .blackboard-graph-shell { min-height: 680px; }
-  .blackboard-cytoscape, .blackboard-loading { inset: 0 0 220px; }
   .blackboard-node-detail { top: auto; left: 0; width: auto; height: 220px; border-top: 1px solid #26353d; border-left: 0; }
   .blackboard-footer { align-items: flex-start; flex-wrap: wrap; }.blackboard-footer em { width: 100%; margin-left: 0; text-align: left; }
 }
@@ -201,6 +199,21 @@ button, input, textarea, select { font: inherit; }
 @media (max-width: 600px) { .command-metrics { grid-template-columns: 1fr; }.command-metric { min-height: 86px; }.loop-orbit { justify-content: flex-start; overflow-x: auto; }.loop-node { flex: 0 0 70px; }.run-overview-row { grid-template-columns: 1fr auto; } }
 
 .incident-page { display: flex; flex-direction: column; gap: 12px; }
+
+/* FRONTEND CUSTOMIZATION: unified blackboard presentation.  The graph owns the
+   full canvas; node details are shown in a double-click modal instead of the
+   legacy right-hand bordered inspector. */
+.blackboard-cytoscape, .blackboard-loading { inset: 0 !important; }
+.blackboard-node-detail { display: none !important; }
+.blackboard-layout-badge { display: inline-flex; height: 30px; padding: 0 10px; align-items: center; color: #a6b6bc; background: #121a1f; border: 1px solid #2a3a42; border-radius: 6px; font-size: 9px; white-space: nowrap; }
+.node-modal-title { display: inline-flex; align-items: center; gap: 9px; }
+.node-modal-title i { display: inline-grid; width: 28px; height: 28px; place-items: center; border: 1px solid currentColor; border-radius: 6px; }
+.node-modal-title .ant-tag { margin: 0 0 0 4px; font: 9px Consolas, monospace; }
+.node-modal-content > p { margin: 0 0 18px; color: #c8d8de; font-size: 13px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
+.node-modal-content dl { display: grid; gap: 8px; margin: 0; }
+.node-modal-content dl > div { display: grid; grid-template-columns: 82px minmax(0,1fr); padding: 9px 11px; background: #0d1519; border: 1px solid #2a3b44; border-radius: 7px; }
+.node-modal-content dt { color: #78909a; font-size: 11px; }
+.node-modal-content dd { margin: 0; color: #d8e5e9; font-size: 11px; overflow-wrap: anywhere; }
 .incident-hero { padding-bottom: 8px; }
 .incident-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
 .incident-metric { display: flex; min-height: 92px; padding: 14px 16px; align-items: center; gap: 12px; border: 1px solid #293a42; border-radius: 9px; background: linear-gradient(135deg, rgba(18,28,33,.94), rgba(10,17,21,.9)); }

@@ -23,6 +23,7 @@ from security_agent.ingest import IngestError, InputIngestor
 from security_agent.ledger import LedgerStore
 from security_agent.llm import ModelGateway
 from security_agent.mcp_generated import GeneratedMCPStore
+from security_agent.penetration_integration import wait_for_project_terminal
 from security_agent.schemas import (
     AgentState,
     ApprovalDecision,
@@ -558,9 +559,20 @@ class SecurityOrchestrator:
                 target_scope=list(state.task.target_scope),
                 input_artifacts=list(state.input_artifacts),
                 mcp_generated_root=str(self.settings.mcp_generated_root),
+                module_poll_interval_seconds=self.settings.penetration_poll_interval_seconds,
+                module_poll_timeout_seconds=self.settings.penetration_poll_timeout_seconds,
             ),
         )
         state.observations.append(result)
+        if state.module_route == "penetration":
+            project_id = result.data.get("project_id")
+            if isinstance(project_id, str) and project_id.strip():
+                state.external_execution = {
+                    "module": "penetration",
+                    "project_id": project_id.strip(),
+                    "status": "submitted",
+                    "objective_reached": False,
+                }
         return await self._checkpoint(
             state,
             "tool.completed",
@@ -573,6 +585,7 @@ class SecurityOrchestrator:
                 "coverage": result.data.get("coverage"),
                 "module_route": state.module_route,
                 "project_id": result.data.get("project_id"),
+                "external_status": state.external_execution.get("status"),
             },
         )
 
@@ -599,15 +612,150 @@ class SecurityOrchestrator:
         state = await self.verifier.run(self._state(value))
         step = state.plan[state.current_step_index]
         latest = state.observations[-1]
+        if state.module_route == "penetration":
+            project_id = latest.data.get("project_id")
+            if isinstance(project_id, str) and project_id.strip():
+                async def on_update(update: dict[str, Any]) -> None:
+                    state.external_execution = {
+                        "module": "penetration",
+                        **update,
+                        "exploration_complete": bool(update.get("terminal")),
+                    }
+                    status_payload = {
+                        key: update[key]
+                        for key in (
+                            "project_id", "status", "terminal", "objective_reached",
+                            "fact_count", "intent_count", "goal_intent_count", "elapsed_ms",
+                        )
+                        if key in update
+                    }
+                    # Persist first so an event-driven UI refresh observes
+                    # the same external_execution snapshot that produced the
+                    # event, rather than racing the subsequent database write.
+                    self.ledger.save_state(state)
+                    await self._event(state, "penetration.status", status_payload)
+                    # This explicit event is consumed by the UI as the
+                    # exploration-path progress signal.  It is emitted for
+                    # every poll, while report generation remains gated by
+                    # the terminal decision below.
+                    await self._event(state, "exploration.updated", status_payload)
+
+                try:
+                    external = await wait_for_project_terminal(
+                        self.settings.penetration_base_url,
+                        project_id.strip(),
+                        timeout_seconds=self.settings.penetration_poll_timeout_seconds,
+                        interval_seconds=self.settings.penetration_poll_interval_seconds,
+                        on_update=on_update,
+                    )
+                except Exception as exc:
+                    latest.status = ToolStatus.ERROR
+                    state.external_execution = {
+                        "module": "penetration",
+                        "project_id": project_id.strip(),
+                        "status": "unavailable",
+                        "terminal": True,
+                        "exploration_complete": True,
+                        "objective_reached": False,
+                    }
+                    state.status = RunStatus.PARTIAL
+                    state.last_error = f"渗透外部项目状态查询失败：{type(exc).__name__}"
+                    self.ledger.save_state(state)
+                    await self._event(
+                        state,
+                        "exploration.completed",
+                        {
+                            "project_id": project_id,
+                            "status": "unavailable",
+                            "objective_reached": False,
+                            "error": state.last_error,
+                        },
+                    )
+                    return await self._checkpoint(
+                        state,
+                        "penetration.terminal",
+                        {
+                            "project_id": project_id,
+                            "status": "unavailable",
+                            "objective_reached": False,
+                            "error": state.last_error,
+                        },
+                        "report",
+                    )
+                latest.data.update({
+                    "external_status": external.get("status"),
+                    "objective_reached": bool(external.get("objective_reached")),
+                    "external_terminal": bool(external.get("terminal")),
+                    "exploration_complete": bool(external.get("terminal")),
+                    "external_fact_count": external.get("fact_count"),
+                    "external_intent_count": external.get("intent_count"),
+                })
+                detail = external.get("detail")
+                if isinstance(detail, dict):
+                    # Preserve bounded blackboard content for the reporter so
+                    # the final result can cite facts/flags instead of only
+                    # showing project counters.
+                    latest.data["external_project"] = detail.get("project")
+                    latest.data["external_facts"] = [
+                        item for item in detail.get("facts", [])[:200] if isinstance(item, dict)
+                    ]
+                    latest.data["external_intents"] = [
+                        item for item in detail.get("intents", [])[:200] if isinstance(item, dict)
+                    ]
+                state.external_execution = {
+                    "module": "penetration",
+                    "project_id": project_id.strip(),
+                    "exploration_complete": bool(external.get("terminal")),
+                    **{key: value for key, value in external.items() if key != "detail"},
+                }
+                if external.get("status") == "timeout":
+                    latest.status = ToolStatus.TIMEOUT
+                    state.status = RunStatus.PARTIAL
+                    state.last_error = "渗透外部项目在限定时间内未进入终态"
+                elif external.get("failed"):
+                    latest.status = ToolStatus.ERROR
+                    state.status = RunStatus.FAILED
+                    state.last_error = f"渗透外部项目以 {external.get('status')} 终止"
+                elif external.get("objective_reached"):
+                    latest.status = ToolStatus.SUCCESS
+                    state.last_error = None
+                else:
+                    latest.status = ToolStatus.ERROR
+                    state.status = RunStatus.FAILED
+                    state.last_error = "Cairn 已结束，但未提供可验证的目标完成证据"
+                self.ledger.save_state(state)
+                await self._event(state, "penetration.terminal", {
+                    "project_id": project_id,
+                    "status": state.external_execution.get("status"),
+                    "objective_reached": state.external_execution.get("objective_reached", False),
+                    "terminal": True,
+                    "error": state.last_error,
+                })
+                await self._event(state, "exploration.completed", {
+                    "project_id": project_id,
+                    "status": state.external_execution.get("status"),
+                    "objective_reached": state.external_execution.get("objective_reached", False),
+                    "fact_count": state.external_execution.get("fact_count", 0),
+                    "intent_count": state.external_execution.get("intent_count", 0),
+                })
         if latest.status == ToolStatus.SUCCESS and state.last_error is None:
             state.current_step_index += 1
             route = "next" if state.current_step_index < len(state.plan) else "report"
+        elif (
+            state.status in {RunStatus.FAILED, RunStatus.DENIED}
+            or state.external_execution.get("status") in {"timeout", "unavailable"}
+        ):
+            # A terminal external failure is not an idempotent tool error: do
+            # not create a second Cairn project by sending the step through the
+            # generic retry path.
+            route = "report"
         else:
             attempts = state.retry_counts.get(step.step_id, 0)
             if attempts + 1 < step.max_attempts and state.budget.steps_used < state.budget.max_steps:
                 route = "reflect"
             else:
-                state.status = RunStatus.PARTIAL
+                if state.status not in {RunStatus.FAILED, RunStatus.DENIED}:
+                    state.status = RunStatus.PARTIAL
                 route = "report"
         return await self._checkpoint(
             state,

@@ -42,6 +42,20 @@ function TaskStatusPanel({ run, events }) {
     <span>新建任务后，系统会在这里显示模块路由、执行进度和证据统计。</span>
   </div>
   const routeLabels = { code_audit: '代码审计', reverse: '逆向分析', penetration: '渗透测试', unsupported: '人工研判' }
+  const externalLabels = {
+    submitted: '已提交，等待外部执行',
+    running: '外部渗透执行中',
+    completed: '外部目标已确认完成',
+    complete: '外部目标已确认完成',
+    succeeded: '外部目标已确认完成',
+    success: '外部目标已确认完成',
+    failed: '外部执行失败',
+    denied: '外部执行被拒绝',
+    timeout: '外部执行超时',
+    unavailable: '外部状态不可用',
+  }
+  const externalStatus = run.external_execution?.status
+  const externalText = externalLabels[externalStatus] || (run.module_route === 'penetration' ? '等待外部渗透状态' : '不适用')
   return <div className="score-panel task-status-panel">
     <div className="score-heading"><span><SafetyCertificateOutlined /><b>任务状态</b></span><StatusTag status={run.status} /></div>
     <div className="score-metrics">
@@ -49,8 +63,9 @@ function TaskStatusPanel({ run, events }) {
       <span><small>分析模块</small><b>{routeLabels[run.module_route] || run.module_route || '待识别'}</b></span>
       <span><small>输入材料</small><b>{run.budget?.tool_calls_used ?? 0} 次工具调用</b></span>
       <span><small>账本事件</small><b>{events.length}</b></span>
+      <span><small>外部执行</small><b>{externalText}</b></span>
     </div>
-    <Alert type="info" showIcon title="统一文件分析流程" description="所有题目通过单文件分析、AI辅助文件分析或题库格式化文件分析进入对应安全模块；结果以可验证证据为准。" />
+    <Alert type={run.module_route === 'penetration' && !['completed', 'complete', 'succeeded', 'success', 'failed', 'denied', 'timeout', 'unavailable'].includes(externalStatus) ? 'warning' : 'info'} showIcon title={run.module_route === 'penetration' ? externalText : '统一文件分析流程'} description={run.module_route === 'penetration' ? '仅在 Cairn 项目进入终态且黑板存在目标完成证据后，任务才会标记为完成。' : '所有题目通过单文件分析、AI辅助文件分析或题库格式化文件分析进入对应安全模块；结果以可验证证据为准。'} />
   </div>
 }
 
@@ -71,6 +86,7 @@ export function WorkbenchPage() {
   const [modules, setModules] = useState([])
   const socketRef = useRef(null)
   const lastSequence = useRef(0)
+  const refreshToken = useRef(0)
 
   const refreshRuns = useCallback(async () => {
     const data = await listRuns()
@@ -82,11 +98,28 @@ export function WorkbenchPage() {
 
   const refreshSelected = useCallback(async () => {
     if (!selectedId) return
+    const token = ++refreshToken.current
     const [nextRun, ledger] = await Promise.all([getRun(selectedId), getLedger(selectedId)])
+    // An event-triggered refresh can overtake the timer refresh.  Discard an
+    // older response so a slow request cannot roll the UI back to stale state.
+    if (token !== refreshToken.current) return
     setRun(nextRun)
     setEvents(ledger.events || [])
     lastSequence.current = Math.max(0, ...(ledger.events || []).map((item) => item.sequence))
-    try { setReport(await getReport(selectedId)) } catch { setReport(null) }
+    // A report is a terminal artifact.  Avoid repeatedly requesting a 409
+    // while the exploration path is still running, and never present an
+    // early/partial report as the final result.
+    const terminal = ['completed', 'partial', 'failed', 'denied'].includes(nextRun.status)
+    if (terminal) {
+      try {
+        const nextReport = await getReport(selectedId)
+        if (token === refreshToken.current) setReport(nextReport)
+      } catch {
+        if (token === refreshToken.current) setReport(null)
+      }
+    } else {
+      setReport(null)
+    }
   }, [selectedId])
 
   const clearMissingRun = useCallback(async () => {
@@ -120,7 +153,7 @@ export function WorkbenchPage() {
     const timer = setInterval(() => {
       refreshSelected().catch(() => {})
       refreshRuns().catch(() => {})
-    }, 4000)
+    }, ['completed', 'partial', 'failed', 'denied'].includes(run?.status) ? 6000 : 1500)
     return () => clearInterval(timer)
   }, [selectedId, refreshSelected, clearMissingRun])
 
@@ -140,7 +173,12 @@ export function WorkbenchPage() {
           lastSequence.current = Math.max(lastSequence.current, event.sequence || 0)
           setEvents((current) => current.some((item) => item.event_id === event.event_id)
             ? current : [...current, event].sort((a, b) => a.sequence - b.sequence))
-          if (['agent.completed', 'agent.failed', 'report.generated', 'run.failed'].includes(event.event_type)) {
+          if ([
+            'agent.completed', 'agent.failed', 'tool.started', 'tool.completed',
+            'analysis.completed', 'verification.completed', 'report.generated',
+            'run.failed', 'penetration.status', 'penetration.terminal',
+            'exploration.updated', 'exploration.completed',
+          ].includes(event.event_type)) {
             refreshSelected().catch(() => {})
           }
         } catch { message.error('收到无法解析的实时事件') }
@@ -212,7 +250,7 @@ export function WorkbenchPage() {
       {view === 'stream' ? <RuntimeStream events={events} connected={streamConnected} active={Boolean(selectedId)} /> : view === 'graph' ? <BlackboardGraph run={run} events={events} /> : view === 'thinking' ? <AIThoughtTimeline events={events} runStatus={run?.status} downloadUrl={run ? thoughtProcessUrl(run.run_id) : ''} /> : report ? <div className="report-view">
         <div className="report-hero"><Text className="panel-kicker">安全审计报告</Text><Title level={3}>{localizePublicText(report.executive_summary)}</Title><Paragraph>{report.limitations?.map(localizePublicText).join('；') || '所有结论均已通过证据引用验证。'}</Paragraph></div>
         {report.findings?.map(localizeFinding).map((finding) => <article className="finding-card" key={finding.finding_id}><span className={`severity is-${finding.severity.toLowerCase()}`}>{severityLabels[finding.severity] || finding.severity}</span><div><b>{finding.title}</b><p>{finding.description}</p>{finding.remediation && <p className="finding-remediation"><strong>修复建议：</strong>{finding.remediation}</p>}<small>{finding.path}{finding.line ? `:${finding.line}` : ''} · 证据 {(finding.evidence_ids || []).join(', ')}</small></div></article>)}
-      </div> : <Empty description="报告将在运行结束后生成" />}
+      </div> : <Empty description={run && !['completed', 'partial', 'failed', 'denied'].includes(run.status) ? '探索路径尚未完成，结果生成已延迟' : '报告将在运行结束后生成'} />}
     </section>
 
     <aside className={`glass-panel inspector-panel ${view === 'graph' ? 'is-graph-hidden' : ''}`}>

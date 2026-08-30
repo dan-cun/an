@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+import time
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -22,6 +25,104 @@ class PenetrationUnavailableError(RuntimeError):
 
 class PenetrationProtocolError(RuntimeError):
     pass
+
+
+TERMINAL_PROJECT_STATUSES = frozenset(
+    {"completed", "complete", "succeeded", "success", "failed", "denied", "cancelled", "canceled", "error"}
+)
+FAILED_PROJECT_STATUSES = frozenset({"failed", "denied", "cancelled", "canceled", "error"})
+
+
+def evaluate_project_completion(detail: dict[str, Any]) -> dict[str, Any]:
+    """Return a conservative completion decision from a Cairn project detail.
+
+    A project being marked completed is not sufficient by itself: the blackboard
+    must also contain a concluded intent targeting the goal fact.  This prevents
+    an early/optimistic worker status from being exposed as a solved task.
+    """
+    project = detail.get("project") if isinstance(detail.get("project"), dict) else {}
+    status = str(project.get("status", "unknown")).strip().casefold()
+    facts = detail.get("facts") if isinstance(detail.get("facts"), list) else []
+    intents = detail.get("intents") if isinstance(detail.get("intents"), list) else []
+    goal_intents = [
+        item for item in intents
+        if isinstance(item, dict)
+        and item.get("to") == "goal"
+        and (item.get("concluded_at") or item.get("status") in {"completed", "confirmed"})
+    ]
+    objective_reached = status in {"completed", "complete", "succeeded", "success"} and bool(goal_intents)
+    return {
+        "status": status,
+        "terminal": status in TERMINAL_PROJECT_STATUSES,
+        "failed": status in FAILED_PROJECT_STATUSES,
+        "objective_reached": objective_reached,
+        "fact_count": len(facts),
+        "intent_count": len(intents),
+        "goal_intent_count": len(goal_intents),
+    }
+
+
+async def wait_for_project_terminal(
+    base_url: str,
+    project_id: str,
+    *,
+    timeout_seconds: float,
+    interval_seconds: float,
+    on_update: Callable[[dict[str, Any]], Awaitable[None] | None] | None = None,
+) -> dict[str, Any]:
+    """Poll Cairn until a terminal project state or a bounded timeout."""
+    started = time.monotonic()
+    last_update: dict[str, Any] = {"status": "unknown", "terminal": False, "objective_reached": False}
+    while True:
+        detail: dict[str, Any] = {}
+        try:
+            detail = await penetration_get(
+                base_url,
+                f"/projects/{project_id}",
+                timeout_seconds=min(10.0, timeout_seconds),
+            )
+            decision = evaluate_project_completion(detail)
+        except KeyError:
+            return {
+                "status": "failed",
+                "terminal": True,
+                "failed": True,
+                "objective_reached": False,
+                "project_id": project_id,
+                "fact_count": 0,
+                "intent_count": 0,
+                "error": "Cairn project was not found",
+            }
+        except Exception as exc:
+            decision = {
+                "status": "poll_error",
+                "terminal": False,
+                "failed": False,
+                "objective_reached": False,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        decision = {
+            **decision,
+            "project_id": project_id,
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+        }
+        last_update = decision
+        if on_update is not None:
+            update_result = on_update(decision)
+            if asyncio.iscoroutine(update_result):
+                await update_result
+        if decision["terminal"]:
+            return {"detail": detail, **decision}
+        if time.monotonic() - started >= timeout_seconds:
+            return {
+                "detail": detail,
+                **last_update,
+                "status": "timeout",
+                "terminal": True,
+                "timed_out": True,
+                "objective_reached": False,
+            }
+        await asyncio.sleep(min(interval_seconds, max(0.0, timeout_seconds - (time.monotonic() - started))))
 
 
 def project_title_for_run(run_id: str) -> str:

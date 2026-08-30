@@ -12,6 +12,8 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from security_agent.guardrail import Guardrail, GuardrailDecision
 from security_agent.mcp_generated import GeneratedMCPStore
 from security_agent.penetration_integration import project_title_for_run
@@ -466,6 +468,24 @@ class ReverseModuleTool(BaseTool):
         except ToolError as exc:
             return ToolResult(status=ToolStatus.DENIED, error_code="TOOL_SCOPE_VIOLATION", error_message=str(exc))
         files = [target] if target.is_file() else [p for p in target.rglob("*") if p.is_file()]
+
+        # The reverse service owns the full reverse-analysis workflow and its
+        # model/tool ledger. Upload the bounded task material to that API first
+        # so this adapter does not silently reduce a reverse question to magic
+        # byte detection. If the service is unavailable, retain a local static
+        # triage fallback and report that degradation explicitly.
+        if context.module_base_url:
+            try:
+                remote = await self._invoke_remote(target, files, context)
+                if remote is not None:
+                    return remote
+            except (httpx.HTTPError, OSError, ValueError) as exc:
+                remote_error = f"{type(exc).__name__}: {exc}"
+            else:
+                remote_error = "reverse service returned no result"
+        else:
+            remote_error = "reverse service URL is not configured"
+
         findings, evidence = [], []
         for path in files[:200]:
             try:
@@ -481,7 +501,97 @@ class ReverseModuleTool(BaseTool):
             ev = Evidence(evidence_id=eid, source="reverse-module:local", summary=f"{magic} 样本 {rel}", artifact_ref=rel, sha256=digest, metadata={"format": magic, "size": len(raw)})
             evidence.append(ev)
             findings.append(Finding(rule_id="REVERSE-FORMAT", severity="UNKNOWN", confidence="HIGH", path=rel, title=f"检测到 {magic} 二进制样本", description="已提取文件格式、大小和哈希，可继续由逆向服务进行导入表及行为分析。", evidence_ids=[eid], raw={"format": magic, "sha256": digest}).model_dump(mode="json"))
-        return ToolResult(status=ToolStatus.SUCCESS, data={"findings": findings, "format_count": len(findings), "adapter": "local"}, summary=f"逆向模块完成样本初筛，识别 {len(findings)} 个 PE/ELF 文件。", evidence=evidence, duration_ms=int((time.monotonic()-started)*1000))
+        return ToolResult(
+            status=ToolStatus.SUCCESS,
+            data={"findings": findings, "format_count": len(findings), "adapter": "local", "remote_error": remote_error},
+            summary=f"逆向 API 不可用，已降级为本地样本初筛，识别 {len(findings)} 个 PE/ELF 文件。",
+            evidence=evidence,
+            duration_ms=int((time.monotonic()-started)*1000),
+        )
+
+    @staticmethod
+    async def _invoke_remote(target: Path, files: list[Path], context: ToolContext) -> ToolResult | None:
+        started = time.monotonic()
+        base_url = context.module_base_url.rstrip("/")
+        timeout = httpx.Timeout(20.0, connect=5.0)
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+            attachments: list[dict[str, str]] = []
+            for path in files[:50]:
+                raw = path.read_bytes()
+                if len(raw) > 50 * 1024 * 1024:
+                    continue
+                response = await client.post(
+                    f"{base_url}/api/v1/uploads",
+                    files={"file": (path.name, raw, "application/octet-stream")},
+                )
+                response.raise_for_status()
+                payload = response.json()
+                reference = payload.get("ref")
+                if isinstance(reference, str) and reference:
+                    attachments.append({"ref": reference, "name": path.name})
+            if not attachments:
+                return None
+            task = {
+                "objective": context.task_objective or "对上传的逆向题目样本完成静态分析并给出可验证结论",
+                "attachments": attachments,
+                "target_scope": context.target_scope,
+                "expected_outputs": ["reverse_report", "security_report"],
+                "autonomy_policy": "graded",
+                # SecMind's trusted domain vocabulary maps static binary
+                # analysis to ``forensics_static_reverse``; using the generic
+                # unified-router label ``reverse`` leaves the remote task in
+                # ``scenario=unknown`` and skips its reverse tool lane.
+                "primary_domain": "forensics_static_reverse",
+            }
+            response = await client.post(f"{base_url}/api/v1/tasks", json=task)
+            response.raise_for_status()
+            run_id = response.json().get("run_id")
+            if not isinstance(run_id, str) or not run_id:
+                return None
+            # DeepSeek-backed reverse runs can spend up to a couple of minutes
+            # on PE extraction and structured answer validation.  Keep the
+            # adapter window longer than the provider's 180s logical timeout,
+            # otherwise a completed remote report is incorrectly surfaced as a
+            # local timeout by the unified orchestrator.
+            deadline = time.monotonic() + 300
+            while time.monotonic() < deadline:
+                await asyncio.sleep(0.8)
+                state_response = await client.get(f"{base_url}/api/v1/runs/{run_id}")
+                state_response.raise_for_status()
+                state = state_response.json()
+                status = str(state.get("status", ""))
+                if status not in {"completed", "partial", "failed", "denied"}:
+                    continue
+                report_response = await client.get(f"{base_url}/api/v1/runs/{run_id}/report")
+                report_response.raise_for_status()
+                report = report_response.json()
+                findings = report.get("findings", []) if isinstance(report, dict) else []
+                evidence = [Evidence.model_validate(item) for item in report.get("evidence", [])] if isinstance(report, dict) else []
+                answer_payload = report.get("answer_payload") if isinstance(report, dict) else None
+                return ToolResult(
+                    status=ToolStatus.SUCCESS if status == "completed" else ToolStatus.ERROR,
+                    data={
+                        "adapter": "reverse_api",
+                        "remote_run_id": run_id,
+                        "remote_status": status,
+                        "findings": findings,
+                        # Preserve the reverse service's typed answer so the
+                        # unified analyst/reporter can summarize concrete
+                        # values (entry points, strings, flags), not only
+                        # Finding records.
+                        "answer_payload": answer_payload,
+                    },
+                    summary=str(report.get("executive_summary", f"逆向服务运行结束：{status}")) if isinstance(report, dict) else f"逆向服务运行结束：{status}",
+                    evidence=evidence,
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                )
+            return ToolResult(
+                status=ToolStatus.TIMEOUT,
+                data={"adapter": "reverse_api", "remote_run_id": run_id},
+                summary="逆向服务已接收任务，但在统一后端等待窗口内未返回报告。",
+                error_code="REVERSE_API_TIMEOUT",
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
 
 
 class PenetrationModuleTool(BaseTool):

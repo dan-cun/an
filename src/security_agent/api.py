@@ -730,11 +730,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return
         await websocket.accept()
         try:
-            for stored_event in service.ledger.events(run_id, after_sequence=after_sequence):
-                await websocket.send_text(stored_event.model_dump_json())
             async with service.event_hub.subscribe(run_id) as queue:
+                # Subscribe before reading the backlog.  Reading the backlog
+                # first creates a race where events emitted during that read
+                # are lost, which makes the UI appear frozen until its next
+                # polling pass.
+                last_sequence = after_sequence
+                for stored_event in service.ledger.events(run_id, after_sequence=after_sequence):
+                    await websocket.send_text(stored_event.model_dump_json())
+                    last_sequence = max(last_sequence, stored_event.sequence)
                 while True:
                     live_event = await queue.get()
+                    # The event may already have been included in the
+                    # backlog if it was committed just before the snapshot.
+                    # Sequence filtering keeps reconnects and the initial
+                    # snapshot idempotent.
+                    sequence = int(live_event.get("sequence") or 0)
+                    if sequence <= last_sequence:
+                        continue
+                    last_sequence = sequence
                     await websocket.send_text(json.dumps(live_event, ensure_ascii=False))
         except WebSocketDisconnect:
             return

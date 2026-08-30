@@ -276,7 +276,9 @@ export function TaskModal({ open, onClose, onCreated }) {
             <Select options={[
               { value: 'graded', label: '分级审批' },
               { value: 'approval_all', label: '全部审批' },
-              { value: 'automatic', label: '自动执行' },
+              // FRONTEND CUSTOMIZATION: automatic mode now bypasses bounded R2
+              // approval (R3/blocked operations remain denied by the backend).
+              { value: 'automatic', label: '自动执行（免 R2 审批）' },
             ]} />
           </Form.Item>
         </div>

@@ -21,6 +21,7 @@ from security_agent.schemas import (
     InputArtifact,
     PlanStep,
     RiskLevel,
+    RunStatus,
     Scenario,
     TaskRequest,
     ToolResult,
@@ -260,3 +261,24 @@ async def test_analyst_and_reporter_use_model_summaries() -> None:
     assert state.report is not None
     assert state.report.executive_summary == "模型生成的最终安全总结。"
     assert any(item.model_id == "test-model" for item in state.decisions)
+
+
+@pytest.mark.asyncio
+async def test_penetration_submission_is_not_reported_as_completed() -> None:
+    state = AgentState(
+        run_id="penetration-submitted-only",
+        task=TaskRequest(objective="获取授权靶场 flag"),
+        scenario=Scenario.PENETRATION_TEST,
+        module_route="penetration",
+        observations=[
+            ToolResult(
+                status=ToolStatus.SUCCESS,
+                summary="Cairn 项目已创建",
+                data={"adapter": "penetration_engine", "project_id": "proj-1", "external_status": "submitted"},
+            )
+        ],
+    )
+    result = await ReporterAgent(RecordingGateway()).run(state)
+    assert result.status == RunStatus.PARTIAL
+    assert result.report is not None
+    assert result.report.status == RunStatus.PARTIAL

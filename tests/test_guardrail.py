@@ -21,6 +21,16 @@ def test_graded_risk_policy() -> None:
     assert guardrail.evaluate(manifest(RiskLevel.R3), {}, "graded").action == GuardrailAction.DENY
 
 
+def test_automatic_policy_allows_bounded_r2_without_approval() -> None:
+    decision = Guardrail().evaluate(manifest(RiskLevel.R2), {}, "automatic")
+    assert decision.action == GuardrailAction.ALLOW
+
+
+def test_approval_all_keeps_human_review_for_r2() -> None:
+    decision = Guardrail().evaluate(manifest(RiskLevel.R2), {}, "approval_all")
+    assert decision.action == GuardrailAction.REQUIRE_APPROVAL
+
+
 def test_blocked_intent_cannot_be_lowered_by_manifest() -> None:
     decision = Guardrail().evaluate(manifest(RiskLevel.R0), {"action": "credential_theft"}, "automatic")
     assert decision.action == GuardrailAction.DENY

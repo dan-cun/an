@@ -14,13 +14,15 @@ export const eventLabels = {
   'tool.completed': '安全工具执行完成', 'observation.recorded': '记录工具观测', 'analysis.completed': '分析安全发现',
   'verification.completed': '验证分析结论', 'reflection.completed': '反思与有限重试', 'report.generated': '生成安全报告',
   'memory.candidate': '提交记忆候选', 'run.failed': '运行失败',
+  'penetration.status': '渗透探索状态更新', 'penetration.terminal': '渗透项目进入终态',
+  'exploration.updated': '探索路径实时更新', 'exploration.completed': '探索路径完成',
   'agent.started': '智能体开始工作', 'agent.instruction': '编排器下发指令',
   'agent.thought': '智能体思考摘要', 'agent.completed': '智能体完成节点',
   'agent.failed': '智能体节点失败', 'llm.stream.started': '模型开始流式生成',
   'llm.stream.delta': '模型增量输出', 'llm.stream.completed': '模型流式输出完成', 'llm.stream.failed': '模型流式输出失败',
 }
 
-export const categoryFor = (type = '') => type.startsWith('agent.') || type.startsWith('llm.') ? 'agent' : type.includes('tool') ? 'tool' : type.includes('approval') || type.includes('guardrail') ? 'security' : type.includes('verification') ? 'verification' : type.includes('report') || type.includes('memory') ? 'report' : type.includes('plan') || type.includes('step') ? 'planning' : 'runtime'
+export const categoryFor = (type = '') => type.startsWith('agent.') || type.startsWith('llm.') ? 'agent' : type.includes('tool') ? 'tool' : type.includes('approval') || type.includes('guardrail') ? 'security' : type.includes('verification') ? 'verification' : type.includes('report') || type.includes('memory') ? 'report' : type.includes('plan') || type.includes('step') || type.includes('exploration') || type.includes('penetration') ? 'planning' : 'runtime'
 
 export function projectEvent(event) {
   return { ...event, title: eventLabels[event.event_type] || event.event_type, category: categoryFor(event.event_type), summary: event.summary || event.payload?.summary || event.payload?.reason || '' }
