@@ -53,7 +53,7 @@ export function CockpitPage() {
   const score = Math.min(100, 38 + pending * 4 + (incident?.running ? 0 : 8))
   const level = score > 65 ? '高' : score > 45 ? '中' : '低'
   const task = incident?.running ? (activeRuns ? `正在编排 ${activeRuns} 个安全任务` : '正在执行环境巡检') : '监测模型处于待命状态'
-  const go = (path) => navigate(path)
+  const go = (path) => window.__STANDALONE_COCKPIT__ ? window.location.assign(path) : navigate(path)
 
   return <div className="hero-shell cockpit-host">
     <RobotCanvas />
