@@ -1,0 +1,104 @@
+:root {
+  --cockpit-ink: #eafaff;
+  --cockpit-muted: #76949e;
+  --cockpit-cyan: #61e4ff;
+  --cockpit-green: #69e0ae;
+  --cockpit-amber: #f0bf67;
+  --cockpit-danger: #ff9b70;
+  --cockpit-surface: rgba(5, 22, 31, .54);
+  --cockpit-surface-deep: rgba(3, 14, 22, .68);
+  --cockpit-line: rgba(106, 204, 226, .28);
+  --cockpit-line-soft: rgba(106, 204, 226, .13);
+  --cockpit-radius: 14px;
+}
+
+.cockpit-host {
+  position: relative;
+  width: calc(100% + 24px);
+  min-height: calc(100vh - 124px);
+  margin: -24px 0 0 -24px;
+  overflow: hidden;
+  background: #050d13;
+}
+.cockpit-host .hero-stage { position: absolute; inset: 0; width: 100%; height: 100%; background: radial-gradient(ellipse at 50% 45%, rgba(40, 133, 168, .16), transparent 42%), #050d13; }
+.cockpit-host .hero-stage canvas { display: block; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+.cockpit-host .hero-loading { position: absolute; left: 50%; bottom: 3rem; z-index: 2; transform: translateX(-50%); color: rgba(215, 246, 255, .72); font-size: 12px; transition: opacity .3s ease, transform .3s ease; }
+.cockpit-host .hero-loading.is-hidden { opacity: 0; transform: translate(-50%, .5rem); pointer-events: none; }
+.cockpit-host .hero-loading.has-error { color: #ff8a8a; }
+
+.cockpit-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  display: flex;
+  min-height: 100%;
+  padding: 22px 28px 18px;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+  color: var(--cockpit-ink);
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse at 50% 45%, rgba(34, 146, 190, .08), transparent 36%),
+    linear-gradient(180deg, rgba(1, 12, 20, .15), rgba(1, 10, 17, .46));
+  scrollbar-color: rgba(103, 216, 241, .38) transparent;
+  scrollbar-width: thin;
+}
+
+.cockpit-overlay::before {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  content: "";
+  opacity: .23;
+  background: repeating-linear-gradient(180deg, transparent 0 3px, rgba(117, 224, 245, .035) 3px 4px);
+  mix-blend-mode: screen;
+}
+
+.cockpit-overlay > * { pointer-events: auto; }
+.cockpit-head { display: flex; min-height: 69px; align-items: center; justify-content: space-between; gap: 18px; }
+.cockpit-head h1 { margin: 5px 0 3px; color: #f4fdff; font-size: clamp(22px, 2.15vw, 29px); font-weight: 650; letter-spacing: .03em; text-shadow: 0 0 24px rgba(97, 228, 255, .28); }
+.cockpit-head p { margin: 0; color: #76949e; font-size: 11px; letter-spacing: .02em; }
+.cockpit-kicker, .card-title i, .cockpit-summary i { display: block; color: #7ea8b3; font-size: 9px; font-style: normal; font-weight: 750; letter-spacing: .15em; }
+
+.cockpit-risk { position: relative; display: flex; min-width: 150px; padding: 10px 15px; align-items: baseline; gap: 7px; border: 1px solid rgba(239, 191, 103, .46); border-radius: 10px; background: linear-gradient(135deg, rgba(48, 35, 18, .62), rgba(14, 27, 32, .68)); box-shadow: 0 0 22px rgba(235, 174, 69, .1), inset 0 1px rgba(255,255,255,.07); backdrop-filter: blur(14px); }
+.cockpit-risk::after { position: absolute; inset: 1px; border-radius: 9px; content: ""; pointer-events: none; background: linear-gradient(110deg, transparent 15%, rgba(255, 224, 153, .2), transparent 45%); opacity: .5; animation: cockpit-shimmer 6s ease-in-out infinite; }
+.cockpit-risk span { color: #dcb471; font-size: 10px; }.cockpit-risk b { color: var(--cockpit-amber); font: 700 28px Consolas, monospace; text-shadow: 0 0 14px rgba(240, 191, 103, .3); }.cockpit-risk small { color: #877b66; font-size: 9px; }
+
+.cockpit-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.metric, .cockpit-card, .task-dialog, .cockpit-summary { position: relative; isolation: isolate; border: 1px solid var(--cockpit-line); background: linear-gradient(145deg, rgba(8, 31, 41, .64), var(--cockpit-surface-deep)); box-shadow: 0 17px 45px rgba(0, 0, 0, .23), inset 0 1px rgba(216, 250, 255, .065), inset 0 -1px rgba(0, 0, 0, .22); backdrop-filter: blur(13px) saturate(125%); }
+.metric::before, .cockpit-card::before, .task-dialog::before, .cockpit-summary::before { position: absolute; inset: -1px; z-index: -1; padding: 1px; border-radius: inherit; content: ""; background: linear-gradient(118deg, rgba(108, 231, 255, .7), rgba(69, 127, 153, .12) 34%, rgba(69, 127, 153, .08) 67%, rgba(108, 231, 255, .5)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; opacity: .54; pointer-events: none; animation: cockpit-border-breathe 7s ease-in-out infinite; }
+.metric::after, .cockpit-card::after, .task-dialog::after, .cockpit-summary::after { position: absolute; top: 0; left: 9%; width: 32%; height: 1px; content: ""; background: linear-gradient(90deg, transparent, rgba(176, 243, 255, .9), transparent); box-shadow: 0 0 9px rgba(97, 228, 255, .85); opacity: .6; animation: cockpit-scan 5.5s ease-in-out infinite; pointer-events: none; }
+
+.metric { display: flex; min-height: 82px; padding: 14px 18px; flex-direction: column; align-items: flex-start; border-radius: var(--cockpit-radius); color: var(--cockpit-ink); cursor: pointer; text-align: left; transition: transform .25s ease, border-color .25s ease, box-shadow .25s ease; }
+.metric:hover { border-color: rgba(105, 229, 255, .68); transform: translateY(-3px); box-shadow: 0 18px 35px rgba(0,0,0,.32), 0 0 20px rgba(81,204,235,.1), inset 0 1px rgba(216,250,255,.12); }
+.metric:active { transform: translateY(-1px); }.metric span { color: #84a4ad; font-size: 10px; }.metric b { margin-top: 2px; color: #effcff; font: 700 27px Consolas, monospace; text-shadow: 0 0 13px rgba(97,228,255,.22); }.metric small { color: #63818b; font-size: 9px; }.metric.gold { border-color: rgba(235, 187, 99, .4); background: linear-gradient(145deg, rgba(47, 35, 20, .56), rgba(8, 23, 31, .67)); }.metric.gold b { color: var(--cockpit-amber); }
+
+.cockpit-grid { display: grid; grid-template-columns: minmax(235px, .78fr) minmax(300px, 1.2fr) minmax(310px, 1fr); min-height: 520px; flex: 1; gap: 12px; }
+.cockpit-left, .cockpit-right { display: flex; min-width: 0; flex-direction: column; gap: 12px; }
+.cockpit-center { position: relative; display: flex; min-height: 500px; align-items: center; justify-content: center; flex-direction: column; text-align: center; }
+
+.cockpit-card { border-radius: var(--cockpit-radius); overflow: hidden; }.scene-card, .rank-card { flex: 1; }.card-title { display: flex; min-height: 68px; padding: 15px 17px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--cockpit-line-soft); }.card-title b { display: block; margin-top: 5px; color: #e8f8fb; font-size: 17px; font-weight: 650; letter-spacing: .02em; }.card-title em { color: var(--cockpit-cyan); font-size: 23px; font-style: normal; text-shadow: 0 0 14px rgba(97,228,255,.55); }.trend-title { min-height: 58px; }
+
+.scene-list { display: grid; gap: 7px; padding: 13px 14px 18px; }.scene-row { display: grid; grid-template-columns: minmax(0,1fr) 30px; gap: 6px; width: 100%; padding: 8px 5px; border: 0; border-radius: 7px; background: transparent; color: #c1d6da; cursor: pointer; text-align: left; transition: background .2s ease, transform .2s ease; }.scene-row:hover { background: linear-gradient(90deg, rgba(62,195,231,.16), transparent); transform: translateX(3px); }.scene-row span { display: flex; align-items: center; gap: 8px; font-size: 11px; }.scene-row > b { color: var(--cockpit-cyan); font: 700 16px Consolas, monospace; text-align: right; }.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--cockpit-cyan); box-shadow: 0 0 9px var(--cockpit-cyan); }.dot.reverse_triage { background: #ae98ff; box-shadow: 0 0 9px #ae98ff; }.dot.penetration_test { background: var(--cockpit-amber); box-shadow: 0 0 9px var(--cockpit-amber); }.dot.incident_response { background: var(--cockpit-green); box-shadow: 0 0 9px var(--cockpit-green); }.bar { grid-column: 1/-1; height: 4px; border-radius: 4px; background: rgba(68, 104, 113, .3); box-shadow: inset 0 1px rgba(255,255,255,.03); }.bar em { display: block; width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #2b7eaa, var(--cockpit-cyan)); box-shadow: 0 0 8px rgba(97,228,255,.48); transition: width .6s ease; }
+
+.trend-chart { display: flex; width: 100%; height: 150px; padding: 15px 19px 16px; align-items: flex-end; justify-content: space-between; gap: 7px; border: 0; background: linear-gradient(180deg, rgba(5,18,23,.06), rgba(4,14,18,.56)); cursor: pointer; }.trend-chart > span { display: flex; height: 100%; flex: 1; align-items: center; justify-content: flex-end; flex-direction: column; gap: 7px; }.trend-chart i { display: block; width: 18px; min-height: 5px; border-radius: 5px 5px 2px 2px; background: linear-gradient(180deg, #8beaff, #327aa6); box-shadow: 0 0 13px rgba(66,193,232,.27); transition: height .35s ease, filter .2s ease; }.trend-chart span:hover i { background: linear-gradient(180deg,#d0f8ff,#5c9dd8); filter: brightness(1.2); box-shadow: 0 0 18px rgba(93,216,255,.72); }.trend-chart small { color: #66858e; font-size: 8px; }
+
+.assistant-label { display: flex; position: absolute; top: 48%; margin-bottom: 12px; align-items: center; gap: 7px; color: #c4e2e8; font-size: 12px; text-shadow: 0 0 12px rgba(90,213,250,.55); transform: translateY(-47px); }.assistant-label > span, .task-dialog header > span { width: 7px; height: 7px; border-radius: 50%; background: var(--cockpit-cyan); box-shadow: 0 0 10px var(--cockpit-cyan); animation: cockpit-pulse 2.2s ease-in-out infinite; }.assistant-label small { color: var(--cockpit-green); font-size: 9px; }.task-dialog { position: absolute; top: 48%; width: min(430px, 100%); padding: 13px 15px; border-radius: 12px; text-align: left; transform: translateY(-2px); }.task-dialog header { display: flex; align-items: center; gap: 7px; color: var(--cockpit-cyan); font-size: 10px; letter-spacing: .06em; }.task-dialog > div { display: flex; margin-top: 9px; align-items: baseline; justify-content: space-between; gap: 8px; }.task-dialog b { color: #d8ecef; font-size: 11px; }.task-dialog small { color: #66838c; font: 8px Consolas, monospace; white-space: nowrap; }.task-dialog nav { display: flex; margin-top: 12px; align-items: center; gap: 6px; }.task-dialog nav i { padding: 4px 8px; border: 1px solid #2b4b57; border-radius: 5px; color: #66818a; font-size: 9px; font-style: normal; background: rgba(14, 49, 59, .22); }.task-dialog nav i.done { color: var(--cockpit-green); border-color: rgba(96,218,171,.5); }.task-dialog nav i.active { color: var(--cockpit-cyan); border-color: rgba(96,218,255,.58); box-shadow: 0 0 10px rgba(96,218,255,.12); }.task-dialog nav u { width: 14px; height: 1px; background: #385b65; text-decoration: none; }
+.center-hint { position: absolute; top: calc(48% + 82px); margin: 10px 0 0; color: #66828a; font-size: 9px; }
+
+.rank-list { padding: 3px 13px 12px; }.rank-row { display: grid; grid-template-columns: 27px minmax(0,1fr) auto; gap: 9px; padding: 9px 5px; align-items: center; border-bottom: 1px solid rgba(105,158,173,.11); transition: background .2s ease; }.rank-row:hover { background: rgba(80, 207, 236, .08); }.rank-row > small { color: #66828b; font: 9px Consolas, monospace; }.rank-row span { display: flex; min-width: 0; flex-direction: column; }.rank-row span b { overflow: hidden; color: #c2dce0; font: 11px Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }.rank-row span i { margin-top: 3px; color: #66838b; font-size: 8px; font-style: normal; }.rank-row > strong { color: var(--cockpit-cyan); font: 700 16px Consolas, monospace; }.rank-row > strong em { color: #77929a; font-size: 9px; font-style: normal; font-weight: 400; }.rank-row > strong.danger { color: var(--cockpit-danger); text-shadow: 0 0 10px rgba(255,155,112,.25); }
+
+.capacity-card { flex: none; }.capacity-list { display: grid; grid-template-columns: repeat(3,1fr); padding: 12px; gap: 1px; background: rgba(82,133,147,.08); }.capacity-list > div { display: flex; padding: 9px 8px; flex-direction: column; background: rgba(7,25,31,.5); }.capacity-list b { color: #e7f7fa; font: 700 18px Consolas, monospace; }.capacity-list small { margin-top: 3px; color: #6b8991; font-size: 8px; }.coverage { display: grid; gap: 7px; padding: 5px 14px 12px; }.coverage label { display: flex; align-items: center; justify-content: space-between; color: #6a8790; font-size: 8px; }.coverage label span { display: flex; width: 58%; height: 7px; align-items: center; gap: 6px; border-radius: 4px; background: #263f47; }.coverage label i { display: block; height: 100%; border-radius: inherit; background: var(--cockpit-cyan); box-shadow: 0 0 8px rgba(97,228,255,.4); }.coverage label i.green { background: var(--cockpit-green); box-shadow: 0 0 8px rgba(105,224,174,.36); }.coverage label b { color: #9ab2b7; font: 8px Consolas, monospace; }
+
+.cockpit-summary { display: flex; min-height: 85px; padding: 14px 17px; align-items: center; gap: 12px; border-radius: 13px; }.cockpit-summary > span { display: grid; width: 35px; height: 35px; flex: none; place-items: center; border: 1px solid rgba(225,174,80,.55); border-radius: 50%; color: #efbe64; font-size: 21px; box-shadow: 0 0 15px rgba(225,174,80,.13); }.cockpit-summary > div { display: flex; min-width: 0; flex: 1; flex-direction: column; }.cockpit-summary b { margin-top: 3px; color: #e4f2f4; font-size: 12px; }.cockpit-summary p { margin: 4px 0 0; color: #708d95; font-size: 9px; }.cockpit-summary button { border: 1px solid rgba(97,228,255,.28); border-radius: 6px; padding: 6px 9px; background: rgba(31,111,136,.12); color: var(--cockpit-cyan); cursor: pointer; font-size: 9px; transition: background .2s ease, border-color .2s ease; }.cockpit-summary button:hover { border-color: rgba(97,228,255,.62); background: rgba(31,111,136,.26); }
+
+@keyframes cockpit-border-breathe { 0%,100% { opacity: .38; } 50% { opacity: .76; } }
+@keyframes cockpit-shimmer { 0%, 100% { transform: translateX(-35%); opacity: 0; } 30%, 70% { opacity: .55; } 50% { transform: translateX(210%); opacity: .75; } }
+@keyframes cockpit-scan { 0%, 100% { transform: translateX(0); opacity: .25; } 45% { transform: translateX(175%); opacity: .78; } 65% { transform: translateX(175%); opacity: .2; } }
+@keyframes cockpit-pulse { 0%,100% { opacity: .65; transform: scale(.9); } 50% { opacity: 1; transform: scale(1.2); } }
+
+@media (max-width: 1000px) { .cockpit-grid { grid-template-columns: minmax(220px,.9fr) minmax(290px,1.1fr); }.cockpit-right { grid-column: 1/-1; display: grid; grid-template-columns: 1.2fr .8fr; }.cockpit-center { min-height: 430px; } }
+@media (max-width: 680px) { .cockpit-overlay { padding: 14px; }.cockpit-head { align-items: flex-start; flex-direction: column; }.cockpit-risk { align-self: flex-end; }.cockpit-metrics { grid-template-columns: 1fr; }.cockpit-grid { grid-template-columns: 1fr; }.cockpit-right { grid-column: auto; display: flex; }.cockpit-center { min-height: 360px; order: -1; }.assistant-label { top: 43%; }.task-dialog { top: 43%; }.center-hint { top: calc(43% + 82px); }.cockpit-summary { align-items: flex-start; }.cockpit-summary button { display: none; } }
+@media (prefers-reduced-motion: reduce) { .metric::before, .cockpit-card::before, .task-dialog::before, .cockpit-summary::before, .cockpit-risk::after, .metric::after, .cockpit-card::after, .task-dialog::after, .cockpit-summary::after, .assistant-label > span, .task-dialog header > span { animation: none; } }
