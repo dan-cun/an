@@ -14,11 +14,19 @@ import { useNavigate } from 'react-router-dom'
 import { listModules, listRuns } from '../api.js'
 import { compactId } from './runtimeModel.js'
 import { StatusTag } from './StatusTag.jsx'
+import { classifyRunStatus, externalStatus, isActiveRun, isAttentionRun, isSuccessfulRun, routeFor, summarizeRunStatuses } from './runStatus.js'
 
 const { Text, Title } = Typography
 const scenarioLabel = {
   code_audit: '代码审计', reverse_triage: '逆向分析', penetration_test: '渗透测试',
   log_analysis: '日志分析', incident_response: '事件响应', unknown: '识别中',
+}
+
+const moduleLabel = { code_audit: '代码审计', audit: '代码审计', reverse: '逆向分析', reverse_triage: '逆向分析', penetration: '渗透测试', penetration_test: '渗透测试', unsupported: '人工研判' }
+const externalLabel = {
+  submitted: 'Cairn 已提交', running: 'Cairn 探索中', completed: 'Cairn 已完成', complete: 'Cairn 已完成',
+  succeeded: 'Cairn 已完成', success: 'Cairn 已完成', failed: 'Cairn 失败', timeout: 'Cairn 超时',
+  unavailable: 'Cairn 不可用', poll_error: 'Cairn 轮询异常',
 }
 
 export function DashboardPage() {
@@ -42,12 +50,11 @@ export function DashboardPage() {
   }, [])
 
   const metrics = useMemo(() => {
-    const terminal = new Set(['completed', 'partial', 'failed', 'denied'])
     return {
+      ...summarizeRunStatuses(runs),
       total: runs.length,
-      active: runs.filter((run) => !terminal.has(run.status)).length,
-      completed: runs.filter((run) => run.status === 'completed').length,
-      needsAttention: runs.filter((run) => ['partial', 'failed', 'denied', 'waiting_approval'].includes(run.status)).length,
+      active: runs.filter(isActiveRun).length,
+      needsAttention: runs.filter(isAttentionRun).length,
     }
   }, [runs])
   const successRate = metrics.total ? Math.round(metrics.completed / metrics.total * 100) : 0
@@ -69,7 +76,15 @@ export function DashboardPage() {
       <Metric icon={<RadarChartOutlined />} label="任务总量" value={metrics.total} hint={`${metrics.active} 个正在运行`} tone="cyan" />
       <Metric icon={<ClockCircleOutlined />} label="运行中" value={metrics.active} hint="实时工作流" tone="blue" />
       <Metric icon={<CheckCircleOutlined />} label="已完成" value={metrics.completed} hint={`完成率 ${successRate}%`} tone="green" />
-      <Metric icon={<ExclamationCircleOutlined />} label="需要关注" value={metrics.needsAttention} hint="失败、部分或待审批" tone="red" />
+      <Metric icon={<ExclamationCircleOutlined />} label="需要关注" value={metrics.needsAttention} hint={`部分 ${metrics.partial} · 失败 ${metrics.failed} · 超时 ${metrics.timeout + metrics.unavailable}`} tone="red" />
+    </section>
+
+    <section className="status-breakdown" aria-label="任务状态明细">
+      {[
+        ['completed', '已完成', 'is-completed'], ['partial', '部分完成', 'is-partial'],
+        ['failed', '失败', 'is-failed'], ['timeout', '超时', 'is-timeout'],
+        ['unavailable', '不可用', 'is-unavailable'], ['running', '运行中', 'is-running'],
+      ].map(([key, label, className]) => <span className={className} key={key}><b>{metrics[key]}</b><small>{label}</small></span>)}
     </section>
 
     <section className="dashboard-grid">
@@ -80,12 +95,16 @@ export function DashboardPage() {
         </header>
         <div className="run-table-head"><span>任务</span><span>模块</span><span>进度</span><span>状态</span></div>
         <div className="run-overview-list">{runs.length ? runs.slice(0, 8).map((run) => {
-          const progress = run.total_steps ? Math.min(100, Math.round(run.current_step / run.total_steps * 100)) : run.status === 'completed' ? 100 : 0
+          const progress = run.total_steps ? Math.min(100, Math.round(run.current_step / run.total_steps * 100)) : isSuccessfulRun(run) ? 100 : 0
+          const route = routeFor(run)
+          const ext = externalStatus(run)
+          const bucket = classifyRunStatus(run)
+          const statusForTag = route === 'penetration' && run.status === 'completed' ? bucket : run.status
           return <button type="button" className="run-overview-row" key={run.run_id} onClick={() => navigate(`/workbench?run=${run.run_id}`)}>
             <span><b>{run.name || scenarioLabel[run.scenario] || '未命名任务'}</b><small>{compactId(run.run_id)}</small></span>
-            <Tag>{scenarioLabel[run.scenario] || run.scenario}</Tag>
+            <Tag>{moduleLabel[route] || scenarioLabel[run.scenario] || route || '待识别'}</Tag>
             <span className="run-progress"><Progress percent={progress} showInfo={false} size="small" /><small>{progress}%</small></span>
-            <StatusTag status={run.status} />
+            <span className="run-status-cell"><StatusTag status={statusForTag} /><small className={`run-state-detail is-${bucket}`}>{bucket === 'completed' ? '已验证完成' : bucket === 'running' ? '工作流进行中' : bucket === 'partial' ? '部分完成' : bucket === 'timeout' ? '外部执行超时' : bucket === 'unavailable' ? '外部状态不可用' : bucket === 'failed' ? '未完成' : externalLabel[ext] || bucket}</small>{route === 'penetration' && ext && <small>{externalLabel[ext] || ext}</small>}</span>
           </button>
         }) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无运行记录" />}</div>
       </article>

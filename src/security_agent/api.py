@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import re
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
-import uvicorn
 import httpx
+import uvicorn
 from fastapi import FastAPI, File, HTTPException, Query, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
@@ -31,11 +34,16 @@ from security_agent.penetration_integration import (
 from security_agent.prompt_catalog import PromptCatalog
 from security_agent.question_bank import QuestionBankError, QuestionBankService
 from security_agent.schemas import (
+    AgentReport,
     ApprovalResponse,
     EvaluationCreateRequest,
     ExperienceCreateRequest,
+    Finding,
+    MCPServerUpsertRequest,
+    MCPToolUpsertRequest,
     ModelConfigUpdate,
     ModelConnectionTest,
+    ModelUsageQuotaUpdate,
     QuestionBankConfirmRequest,
     QuestionBankInspectRequest,
     RunStatus,
@@ -43,6 +51,125 @@ from security_agent.schemas import (
 )
 from security_agent.service import EventHub, RunService
 from security_agent.tools import ToolBroker, default_registry
+
+REPORT_TIMEZONE = ZoneInfo("Asia/Shanghai")
+
+
+def _shift_month(value: datetime, offset: int) -> datetime:
+    index = value.year * 12 + value.month - 1 + offset
+    return value.replace(year=index // 12, month=index % 12 + 1, day=1)
+
+
+def _usage_numbers(value: Any) -> tuple[int, int, int, int]:
+    """Normalize token fields emitted by OpenAI/DeepSeek-compatible APIs."""
+    usage = value if isinstance(value, dict) else {}
+    details = usage.get("prompt_tokens_details")
+    cached = details.get("cached_tokens", 0) if isinstance(details, dict) else 0
+    prompt = int(usage.get("prompt_tokens") or 0)
+    completion = int(usage.get("completion_tokens") or 0)
+    cache_hit = int(usage.get("prompt_cache_hit_tokens") or usage.get("cache_read_tokens") or cached or 0)
+    cache_miss = int(usage.get("prompt_cache_miss_tokens") or 0)
+    prompt = max(prompt, cache_hit + cache_miss)
+    total = int(usage.get("total_tokens") or 0) or prompt + completion
+    return prompt, completion, total, cache_hit
+
+
+def _event_local_time(event: Any) -> datetime:
+    timestamp = event.timestamp
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=UTC)
+    return timestamp.astimezone(REPORT_TIMEZONE)
+
+
+def _usage_series(ledger: LedgerStore) -> dict[str, list[dict[str, Any]]]:
+    """Build hourly/daily/monthly series from durable model stream events."""
+    now = datetime.now(REPORT_TIMEZONE)
+    current_hour = now.replace(minute=0, second=0, microsecond=0)
+    current_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    current_month = current_day.replace(day=1)
+    keys = {
+        "hourly": [(current_hour - timedelta(hours=i)).strftime("%Y-%m-%dT%H:00:00+08:00") for i in range(23, -1, -1)],
+        "daily": [(current_day - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(29, -1, -1)],
+        "monthly": [_shift_month(current_month, i).strftime("%Y-%m") for i in range(-11, 1)],
+    }
+    buckets = {
+        period: {key: {"bucket": key, "tokens": 0, "calls": 0} for key in values}
+        for period, values in keys.items()
+    }
+    since = _shift_month(current_month, -11).astimezone(UTC)
+    completed = ledger.events_by_type("llm.stream.completed", since=since)
+    failed = ledger.events_by_type("llm.stream.failed", since=since)
+    started = ledger.events_by_type("llm.stream.started", since=since)
+    started_keys = {
+        (event.run_id, event.payload.get("trace_id"))
+        for event in started
+        if isinstance(event.payload, dict) and event.payload.get("trace_id")
+    }
+    for event in started:
+        local = _event_local_time(event)
+        bucket_keys = {
+            "hourly": local.strftime("%Y-%m-%dT%H:00:00+08:00"),
+            "daily": local.strftime("%Y-%m-%d"),
+            "monthly": local.strftime("%Y-%m"),
+        }
+        for period, key in bucket_keys.items():
+            if key in buckets[period]:
+                buckets[period][key]["calls"] += 1
+    for event in [*completed, *failed]:
+        local = _event_local_time(event)
+        bucket_keys = {
+            "hourly": local.strftime("%Y-%m-%dT%H:00:00+08:00"),
+            "daily": local.strftime("%Y-%m-%d"),
+            "monthly": local.strftime("%Y-%m"),
+        }
+        _, _, tokens, _ = _usage_numbers(event.payload.get("usage") if isinstance(event.payload, dict) else None)
+        for period, key in bucket_keys.items():
+            if key not in buckets[period]:
+                continue
+            buckets[period][key]["tokens"] += tokens
+            trace_id = event.payload.get("trace_id") if isinstance(event.payload, dict) else None
+            if (event.run_id, trace_id) not in started_keys:
+                buckets[period][key]["calls"] += 1
+    return {period: list(values.values()) for period, values in buckets.items()}
+
+
+def _usage_totals(ledger: LedgerStore, states: list[Any]) -> dict[str, Any]:
+    completed = ledger.events_by_type("llm.stream.completed")
+    failed = ledger.events_by_type("llm.stream.failed")
+    started = ledger.events_by_type("llm.stream.started")
+    usage_events = [*completed, *failed]
+    event_run_ids = {event.run_id for event in usage_events}
+    totals: dict[str, Any] = {
+        "model_call_count": max(len(started), len(usage_events)),
+        "completed_call_count": len(completed),
+        "incomplete_call_count": max(0, len(started) - len(usage_events)),
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "cache_read_tokens": 0,
+        "token_usage_available": False,
+        "usage_estimated": False,
+    }
+    for event in usage_events:
+        usage = event.payload.get("usage") if isinstance(event.payload, dict) else None
+        prompt, completion, total, cache_hit = _usage_numbers(usage)
+        totals["prompt_tokens"] += prompt
+        totals["completion_tokens"] += completion
+        totals["total_tokens"] += total
+        totals["cache_read_tokens"] += cache_hit
+        totals["token_usage_available"] = totals["token_usage_available"] or bool(usage)
+    for state in states:
+        if state.run_id in event_run_ids:
+            continue
+        if not any(event.run_id == state.run_id for event in started):
+            totals["model_call_count"] += state.budget.model_calls_used
+            totals["completed_call_count"] += state.budget.model_calls_used
+        totals["prompt_tokens"] += state.budget.prompt_tokens_used
+        totals["completion_tokens"] += state.budget.completion_tokens_used
+        totals["total_tokens"] += state.budget.prompt_tokens_used + state.budget.completion_tokens_used
+        totals["cache_read_tokens"] += state.budget.cache_read_tokens_used
+        totals["token_usage_available"] = totals["token_usage_available"] or state.budget.model_usage_recorded
+    return totals
 
 
 def build_runtime(settings: Settings) -> tuple[RunService, EvaluationService, ModelGateway, ExperienceStore]:
@@ -145,6 +272,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         return {"schema_version": "1.0", "ok": True, **result}
 
+    @app.post("/api/v1/model-config/models")
+    async def list_model_config_models(payload: ModelConnectionTest) -> dict[str, Any]:
+        """Discover provider model IDs without exposing the API key to the browser."""
+        try:
+            base_url = actual_settings.validate_model_base_url(payload.base_url)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        api_key = payload.api_key or actual_settings.model_api_key
+        if not api_key:
+            raise HTTPException(422, "API Key is required to fetch model list")
+        try:
+            result = await gateway.test_connection(base_url, api_key)
+        except ModelGatewayError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {
+            "schema_version": "1.0",
+            "models": result.get("model_ids", []),
+            "model_count": result.get("model_count", 0),
+            "latency_ms": result.get("latency_ms", 0),
+        }
+
     @app.put("/api/v1/model-config")
     async def update_model_config(payload: ModelConfigUpdate) -> dict[str, Any]:
         try:
@@ -205,21 +353,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {
             "schema_version": "1.0",
             "run_count": len(states),
-            "model_call_count": sum(state.budget.model_calls_used for state in states),
-            "prompt_tokens": sum(state.budget.prompt_tokens_used for state in states),
-            "completion_tokens": sum(state.budget.completion_tokens_used for state in states),
-            "total_tokens": sum(
-                state.budget.prompt_tokens_used + state.budget.completion_tokens_used
-                for state in states
-            ),
-            "cache_read_tokens": sum(state.budget.cache_read_tokens_used for state in states),
-            "token_usage_available": any(state.budget.model_usage_recorded for state in states),
+            **_usage_totals(service.ledger, states),
+            "usage_scope": "local_ledger",
+            "provider_account_usage_synced": False,
+            "quota": {
+                "hourly": actual_settings.model_hourly_token_quota,
+                "daily": actual_settings.model_daily_token_quota,
+                "monthly": actual_settings.model_monthly_token_quota,
+            },
+            "series": _usage_series(service.ledger),
             "models": models,
             "note": (
                 "Usage values are updated from model stream completion events."
                 if any(state.budget.model_usage_recorded for state in states)
                 else "No provider usage has been recorded yet."
             ),
+        }
+
+    @app.put("/api/v1/model-usage/quota")
+    async def update_model_usage_quota(payload: ModelUsageQuotaUpdate) -> dict[str, Any]:
+        actual_settings.model_hourly_token_quota = payload.hourly_tokens
+        actual_settings.model_daily_token_quota = payload.daily_tokens
+        actual_settings.model_monthly_token_quota = payload.monthly_tokens
+        actual_settings.save_runtime_model_config()
+        return {
+            "schema_version": "1.0",
+            "updated": True,
+            "quota": {
+                "hourly": actual_settings.model_hourly_token_quota,
+                "daily": actual_settings.model_daily_token_quota,
+                "monthly": actual_settings.model_monthly_token_quota,
+            },
         }
 
     @app.websocket("/api/v1/model-usage/events")
@@ -425,6 +589,61 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/mcp/catalog")
     async def mcp_catalog() -> dict[str, Any]:
         return app.state.mcp_catalog.payload()
+
+    @app.get("/api/v1/mcp/servers/{server_id}")
+    async def get_mcp_server(server_id: str) -> dict[str, Any]:
+        server = app.state.mcp_catalog.get_server(server_id)
+        if server is None:
+            raise HTTPException(404, "MCP server not found")
+        return {"schema_version": "1.0", "server": server}
+
+    @app.post("/api/v1/mcp/servers", status_code=201)
+    async def create_mcp_server(payload: MCPServerUpsertRequest) -> dict[str, Any]:
+        try:
+            server = app.state.mcp_catalog.create_server(payload.model_dump(mode="json"))
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"schema_version": "1.0", "server": server}
+
+    @app.put("/api/v1/mcp/servers/{server_id}")
+    async def update_mcp_server(server_id: str, payload: MCPServerUpsertRequest) -> dict[str, Any]:
+        server = app.state.mcp_catalog.update_server(server_id, payload.model_dump(mode="json"))
+        if server is None:
+            raise HTTPException(404, "MCP server not found")
+        return {"schema_version": "1.0", "server": server}
+
+    @app.delete("/api/v1/mcp/servers/{server_id}", status_code=204)
+    async def delete_mcp_server(server_id: str) -> Response:
+        if not app.state.mcp_catalog.delete_server(server_id):
+            raise HTTPException(404, "MCP server not found")
+        return Response(status_code=204)
+
+    @app.post("/api/v1/mcp/servers/{server_id}/tools", status_code=201)
+    async def create_mcp_tool(server_id: str, payload: MCPToolUpsertRequest) -> dict[str, Any]:
+        try:
+            tool = app.state.mcp_catalog.create_tool(server_id, payload.model_dump(mode="json"))
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        if tool is None:
+            raise HTTPException(404, "MCP server not found")
+        return {"schema_version": "1.0", "tool": tool}
+
+    @app.put("/api/v1/mcp/servers/{server_id}/tools/{tool_name}")
+    async def update_mcp_tool(
+        server_id: str,
+        tool_name: str,
+        payload: MCPToolUpsertRequest,
+    ) -> dict[str, Any]:
+        tool = app.state.mcp_catalog.update_tool(server_id, tool_name, payload.model_dump(mode="json"))
+        if tool is None:
+            raise HTTPException(404, "MCP server or tool not found")
+        return {"schema_version": "1.0", "tool": tool}
+
+    @app.delete("/api/v1/mcp/servers/{server_id}/tools/{tool_name}", status_code=204)
+    async def delete_mcp_tool(server_id: str, tool_name: str) -> Response:
+        if not app.state.mcp_catalog.delete_tool(server_id, tool_name):
+            raise HTTPException(404, "MCP server or tool not found")
+        return Response(status_code=204)
 
     @app.get("/api/v1/integration-status")
     async def integration_status() -> dict[str, Any]:
@@ -665,6 +884,84 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(404, "Run not found") from exc
         if state.report is None:
             raise HTTPException(409, "Report is not available yet")
+        return state.report.model_dump(mode="json")
+
+    @app.post("/api/v1/runs/{run_id}/report/refresh")
+    async def refresh_report(run_id: str) -> dict[str, Any]:
+        """Synchronize the latest confirmed Cairn result into the report."""
+        try:
+            state = service.state(run_id)
+        except KeyError as exc:
+            raise HTTPException(404, "Run not found") from exc
+        if state.module_route != "penetration":
+            raise HTTPException(409, "Run is not routed to the penetration module")
+        if state.report is None:
+            raise HTTPException(409, "Report is not available yet")
+        try:
+            project_id = await resolve_project_id(
+                state, actual_settings.penetration_base_url, actual_settings.module_timeout_seconds,
+            )
+            if project_id is None:
+                raise HTTPException(409, "Penetration project has not been created yet")
+            detail = await penetration_get(
+                actual_settings.penetration_base_url,
+                f"/projects/{project_id}",
+                actual_settings.module_timeout_seconds,
+            )
+            graph = normalize_penetration_graph(detail)
+        except HTTPException:
+            raise
+        except (PenetrationUnavailableError, PenetrationProtocolError) as exc:
+            raise HTTPException(503, str(exc)) from exc
+        confirmed = [
+            node for node in graph.get("nodes", [])
+            if node.get("type") in {"vulnerability", "fact"} and node.get("status") == "confirmed"
+        ]
+        flag_pattern = re.compile(r"(?:flag|ctf)\{[^}\r\n]+\}", re.IGNORECASE)
+        flag_node = next((node for node in confirmed if flag_pattern.search(str(node.get("description", "")))), None)
+        if flag_node is None:
+            raise HTTPException(409, "Penetration project has no confirmed flag result yet")
+        description = str(flag_node.get("description", "")).strip()
+        finding = Finding(
+            finding_id=f"penetration:{project_id}:{flag_node.get('raw_id', 'result')}",
+            rule_id="PENETRATION-CONFIRMED-RESULT",
+            severity="HIGH",
+            confidence="HIGH",
+            path=str(state.task.target_scope[0] if state.task.target_scope else project_id),
+            title="渗透模块已确认漏洞并获取 Flag",
+            description=description,
+            remediation="修复已确认的命令注入路径，并轮换或撤销暴露的挑战凭据。",
+            raw={"source": "cairn", "project_id": project_id},
+        )
+        previous = state.report
+        state.report = AgentReport.model_validate(previous.model_copy(update={
+            "status": RunStatus.COMPLETED,
+            "executive_summary": f"Cairn 渗透模块已完成目标验证并获取 Flag。{description}",
+            "findings": [item for item in previous.findings if item.rule_id != finding.rule_id] + [finding],
+            "limitations": [
+                item for item in previous.limitations
+                if "尚未获得目标 flag" not in item and "尚未发现漏洞" not in item and "仅完成项目初始化" not in item
+            ] + [f"结果已从 Cairn 项目 {project_id} 刷新。"],
+            "generated_at": datetime.now(UTC),
+        }))
+        state.status = RunStatus.COMPLETED
+        state.external_execution = {
+            **state.external_execution,
+            "module": "penetration",
+            "project_id": project_id,
+            "status": "completed",
+            "terminal": True,
+            "exploration_complete": True,
+            "objective_reached": True,
+        }
+        service.ledger.save_state(state)
+        event = service.ledger.append(
+            run_id,
+            "report.refreshed",
+            {"source": "cairn", "project_id": project_id, "flag_obtained": True},
+            actor="api",
+        )
+        await service.event_hub.publish(event.model_dump(mode="json"))
         return state.report.model_dump(mode="json")
 
     @app.get("/api/v1/runs/{run_id}/ledger")

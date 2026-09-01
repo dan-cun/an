@@ -7,9 +7,11 @@ registers tools with :class:`ToolBroker`, or exposes entries to the planner.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+from uuid import uuid4
 
 from security_agent.mcp_generated import GeneratedMCPStore
 
@@ -188,9 +190,17 @@ _SAFE_TOOL_SERVER_NAMES = {
 
 
 class MCPCatalog:
-    def __init__(self, path: Path | None = None, generated_root: Path | None = None) -> None:
+    def __init__(
+        self,
+        path: Path | None = None,
+        generated_root: Path | None = None,
+        storage_path: Path | None = None,
+    ) -> None:
         self.path = (path or DEFAULT_CONFIG).resolve()
         self.generated_root = (generated_root or self.path.parents[1] / "data" / "mcp-generated").resolve()
+        # Managed entries are presentation-only metadata.  Keep them in a
+        # separate local JSON file so the bundled inventory remains intact.
+        self.storage_path = (storage_path or self.path.parents[1] / "data" / "mcp-catalog.json").resolve()
 
     def _load(self) -> dict[str, Any]:
         if not self.path.is_file():
@@ -242,7 +252,7 @@ class MCPCatalog:
             })
         return result
 
-    def servers(self) -> list[dict[str, Any]]:
+    def _default_servers(self) -> list[dict[str, Any]]:
         payload = self._load()
         guide_ids = self._guide_ids()
         result: list[dict[str, Any]] = []
@@ -278,6 +288,144 @@ class MCPCatalog:
                 }
             )
         return result
+
+    def _load_managed(self) -> list[dict[str, Any]] | None:
+        if not self.storage_path.is_file():
+            return None
+        try:
+            payload = json.loads(self.storage_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, list):
+            return None
+        return [self._normalize_server(item) for item in payload if isinstance(item, dict)]
+
+    @staticmethod
+    def _normalize_server(raw: dict[str, Any]) -> dict[str, Any]:
+        server_id = str(raw.get("server_id") or "")
+        tools = []
+        for value in raw.get("tools", []):
+            if not isinstance(value, dict) or not value.get("name"):
+                continue
+            name = str(value["name"])
+            tools.append(
+                {
+                    "tool_id": f"mcp:{server_id}:{name}",
+                    "name": name,
+                    "display_name": str(value.get("display_name") or name),
+                    "icon": str(value.get("icon") or "tool"),
+                    "purpose": str(value.get("purpose") or "展示型 MCP 工具"),
+                    "input": str(value.get("input") or "工具参数"),
+                    "return": str(value.get("return") or value.get("returns") or "工具结果"),
+                    "invocation_timing": str(value.get("invocation_timing") or "按需展示"),
+                    "risk_level": str(value.get("risk_level") or "R1"),
+                    "available": True,
+                    "runtime_exposed": False,
+                }
+            )
+        return {
+            "server_id": server_id,
+            "name": str(raw.get("name") or server_id),
+            "icon": str(raw.get("icon") or "safety"),
+            "transport": str(raw.get("transport") or "display_only"),
+            "url": str(raw.get("url") or ""),
+            "enabled": False,
+            "status": "managed",
+            "candidate": bool(raw.get("candidate", False)),
+            "risk_level": str(raw.get("risk_level") or "R1"),
+            "category": str(raw.get("category") or "security"),
+            "purpose": str(raw.get("purpose") or "展示型 MCP Server"),
+            "input": str(raw.get("input") or "工具参数"),
+            "return": str(raw.get("return") or "工具结果"),
+            "invocation_timing": str(raw.get("invocation_timing") or "按需展示"),
+            "displayable": bool(raw.get("displayable", True)),
+            "safe_server": bool(raw.get("safe_server", True)),
+            "tools": tools,
+            "tool_count": len(tools),
+            "managed": True,
+        }
+
+    def servers(self) -> list[dict[str, Any]]:
+        managed = self._load_managed()
+        return managed if managed is not None else self._default_servers()
+
+    def _write_servers(self, servers: list[dict[str, Any]]) -> None:
+        self.storage_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.storage_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(servers, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temporary, self.storage_path)
+
+    def get_server(self, server_id: str) -> dict[str, Any] | None:
+        return next((item for item in self.servers() if item["server_id"] == server_id), None)
+
+    def create_server(self, payload: dict[str, Any]) -> dict[str, Any]:
+        servers = self.servers()
+        server_id = str(payload.get("server_id") or f"custom-server-{uuid4().hex[:8]}")
+        if any(item["server_id"] == server_id for item in servers):
+            raise ValueError(f"MCP server already exists: {server_id}")
+        server = self._normalize_server({**payload, "server_id": server_id, "tools": []})
+        self._write_servers([*servers, server])
+        return server
+
+    def update_server(self, server_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        servers = self.servers()
+        current = next((item for item in servers if item["server_id"] == server_id), None)
+        if current is None:
+            return None
+        updated = self._normalize_server({**current, **payload, "server_id": server_id, "tools": current["tools"]})
+        self._write_servers([updated if item["server_id"] == server_id else item for item in servers])
+        return updated
+
+    def delete_server(self, server_id: str) -> bool:
+        servers = self.servers()
+        remaining = [item for item in servers if item["server_id"] != server_id]
+        if len(remaining) == len(servers):
+            return False
+        self._write_servers(remaining)
+        return True
+
+    def create_tool(self, server_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        server = self.get_server(server_id)
+        if server is None:
+            return None
+        name = str(payload.get("name") or f"custom_tool_{uuid4().hex[:8]}")
+        if any(item["name"] == name for item in server["tools"]):
+            raise ValueError(f"MCP tool already exists: {name}")
+        tool = self._normalize_server({"server_id": server_id, "tools": [{**payload, "name": name}]})["tools"][0]
+        server["tools"] = [*server["tools"], tool]
+        self._replace_server(server)
+        return tool
+
+    def update_tool(self, server_id: str, tool_name: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        server = self.get_server(server_id)
+        if server is None:
+            return None
+        current = next((item for item in server["tools"] if item["name"] == tool_name), None)
+        if current is None:
+            return None
+        updated = self._normalize_server(
+            {"server_id": server_id, "tools": [{**current, **payload, "name": tool_name}]}
+        )["tools"][0]
+        server["tools"] = [updated if item["name"] == tool_name else item for item in server["tools"]]
+        self._replace_server(server)
+        return updated
+
+    def delete_tool(self, server_id: str, tool_name: str) -> bool:
+        server = self.get_server(server_id)
+        if server is None:
+            return False
+        remaining = [item for item in server["tools"] if item["name"] != tool_name]
+        if len(remaining) == len(server["tools"]):
+            return False
+        server["tools"] = remaining
+        self._replace_server(server)
+        return True
+
+    def _replace_server(self, server: dict[str, Any]) -> None:
+        normalized = self._normalize_server(server)
+        self._write_servers(
+            [normalized if item["server_id"] == server["server_id"] else item for item in self.servers()]
+        )
 
     def payload(self) -> dict[str, Any]:
         all_servers = self.servers()

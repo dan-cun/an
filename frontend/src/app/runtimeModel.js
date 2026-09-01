@@ -13,7 +13,7 @@ export const eventLabels = {
   'approval.requested': '请求人工审批', 'approval.resolved': '审批处理完成', 'tool.started': '调用安全工具',
   'tool.completed': '安全工具执行完成', 'observation.recorded': '记录工具观测', 'analysis.completed': '分析安全发现',
   'verification.completed': '验证分析结论', 'reflection.completed': '反思与有限重试', 'report.generated': '生成安全报告',
-  'memory.candidate': '提交记忆候选', 'run.failed': '运行失败',
+  'memory.candidate': '提交记忆候选', 'report.refreshed': '刷新最新任务结果', 'run.failed': '运行失败',
   'penetration.status': '渗透探索状态更新', 'penetration.terminal': '渗透项目进入终态',
   'exploration.updated': '探索路径实时更新', 'exploration.completed': '探索路径完成',
   'agent.started': '智能体开始工作', 'agent.instruction': '编排器下发指令',
@@ -28,10 +28,24 @@ export function projectEvent(event) {
   return { ...event, title: eventLabels[event.event_type] || event.event_type, category: categoryFor(event.event_type), summary: event.summary || event.payload?.summary || event.payload?.reason || '' }
 }
 
+// Reconnects may replay a frame and ledger pagination may repeat a boundary.
+// Use both durable event_id and monotonic sequence to keep projections stable.
+export function dedupeEvents(events = []) {
+  const ids = new Set()
+  const sequences = new Set()
+  return events.filter((event) => {
+    if (event?.event_id && ids.has(event.event_id)) return false
+    if (Number.isFinite(event?.sequence) && sequences.has(event.sequence)) return false
+    if (event?.event_id) ids.add(event.event_id)
+    if (Number.isFinite(event?.sequence)) sequences.add(event.sequence)
+    return true
+  })
+}
+
 export function projectStreams(events) {
   const streams = new Map()
   const messages = []
-  for (const event of events) {
+  for (const event of dedupeEvents(events)) {
     const payload = event.payload || {}
     if (event.event_type === 'agent.instruction') messages.push({ ...event, kind: 'instruction', content: payload.content, agent: payload.agent_id })
     if (event.event_type === 'agent.thought') messages.push({ ...event, kind: 'thought', content: payload.summary, agent: payload.agent_id })
@@ -73,6 +87,7 @@ const milestoneLabels = {
   'analysis.completed': '完成安全分析',
   'verification.completed': '完成证据验证',
   'report.generated': '生成任务报告',
+  'report.refreshed': '刷新任务最新结果',
   'memory.candidate': '评估记忆候选',
   'run.failed': '任务执行失败',
 }
@@ -88,7 +103,7 @@ function payloadSummary(payload = {}) {
 }
 
 export function projectThoughtTimeline(events, runStatus) {
-  const ordered = [...events].sort((left, right) => left.sequence - right.sequence)
+  const ordered = dedupeEvents(events).sort((left, right) => left.sequence - right.sequence)
   const items = []
   const toolStarts = new Map()
   const streams = projectStreams(ordered).filter((item) => item.kind === 'model')

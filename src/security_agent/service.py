@@ -19,6 +19,15 @@ from security_agent.schemas import (
 )
 
 
+def canonical_module_route(value: str | None, scenario: str | None = None) -> str:
+    """Normalize legacy route names before exposing RunSummary to clients."""
+    candidate = str(value or scenario or "code_audit").strip().lower()
+    scenario_value = str(scenario or "").strip().lower()
+    if candidate == "audit" and scenario_value in {"reverse_triage", "penetration_test", "reverse", "penetration"}:
+        candidate = scenario_value
+    return {"audit": "code_audit", "reverse_triage": "reverse", "penetration_test": "penetration"}.get(candidate, candidate)
+
+
 class EventHub:
     def __init__(self) -> None:
         self._subscribers: dict[str, set[asyncio.Queue[dict[str, Any]]]] = defaultdict(set)
@@ -120,7 +129,7 @@ class RunService:
             name=state.task.name,
             status=state.status,
             scenario=state.scenario,
-            module_route=state.module_route,
+            module_route=canonical_module_route(state.module_route, state.scenario.value),
             routing=state.routing,
             current_step=state.current_step_index,
             total_steps=len(state.plan),
@@ -137,7 +146,7 @@ class RunService:
                 name=state.task.name,
                 status=state.status,
                 scenario=state.scenario,
-                module_route=state.module_route,
+                module_route=canonical_module_route(state.module_route, state.scenario.value),
                 routing=state.routing,
                 current_step=state.current_step_index,
                 total_steps=len(state.plan),

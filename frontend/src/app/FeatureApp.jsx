@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { AlertOutlined, AuditOutlined, DashboardOutlined, DatabaseOutlined, FileTextOutlined, MenuFoldOutlined, MenuUnfoldOutlined, RobotOutlined, ToolOutlined, TeamOutlined } from '@ant-design/icons'
+import { AlertOutlined, AuditOutlined, BulbOutlined, DashboardOutlined, DatabaseOutlined, FileTextOutlined, MenuFoldOutlined, MenuUnfoldOutlined, MoonOutlined, RobotOutlined, ToolOutlined, TeamOutlined } from '@ant-design/icons'
 import { Button, Layout, Menu, Tag } from 'antd'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { health } from '../api.js'
@@ -15,7 +15,7 @@ import { IncidentResponsePage } from './IncidentResponsePage.jsx'
 const { Header, Sider, Content } = Layout
 const routes = { '/workbench': ['任务编排', <TeamOutlined />], '/audit': ['审计与拦截', <AuditOutlined />], '/experiences': ['经验学习库', <DatabaseOutlined />], '/incident-response': ['应急响应', <AlertOutlined />], '/models': ['模型与用量', <RobotOutlined />], '/prompts': ['Prompt 目录', <FileTextOutlined />], '/mcp': ['MCP 工具清单', <ToolOutlined />] }
 
-export function FeatureApp() {
+export function FeatureApp({ themeMode = 'dark', onToggleTheme }) {
   const navigate = useNavigate(); const location = useLocation(); const [collapsed, setCollapsed] = useState(false); const [backend, setBackend] = useState(null)
   const active = location.pathname.startsWith('/audit') ? '/audit' : location.pathname.startsWith('/experiences') ? '/experiences' : location.pathname.startsWith('/incident-response') ? '/incident-response' : location.pathname.startsWith('/models') ? '/models' : location.pathname.startsWith('/prompts') ? '/prompts' : location.pathname.startsWith('/mcp') ? '/mcp' : '/workbench'
   const [title, titleIcon] = routes[active]
@@ -40,7 +40,13 @@ export function FeatureApp() {
     <Sider className="feature-sidebar" width={236} collapsedWidth={72} collapsed={collapsed} trigger={null}>
       <button className="sidebar-title" type="button" onClick={() => window.location.assign('/cockpit')}><span><b>安全任务平台</b><small>任务编排与审计</small></span></button>
       <Menu mode="inline" selectedKeys={[active]} items={items} onClick={({ key }) => key === '/cockpit' ? window.location.assign('/cockpit') : navigate(key)} />
-      <div className="sidebar-foot"><i className={backend ? 'is-online' : ''} /><span>{backend ? 'Runtime online' : 'Runtime offline'}</span></div>
+      <div className="sidebar-bottom">
+        <div className="sidebar-foot"><i className={backend ? 'is-online' : ''} /><span>{backend ? 'Runtime online' : 'Runtime offline'}</span></div>
+        {onToggleTheme && <button className="theme-toggle" type="button" onClick={onToggleTheme} aria-label={themeMode === 'light' ? '切换深色主题' : '切换浅色主题'} title={themeMode === 'light' ? '切换深色主题' : '切换浅色主题'}>
+          <span className="theme-toggle-icon">{themeMode === 'light' ? <MoonOutlined /> : <BulbOutlined />}</span>
+          <span className="theme-toggle-label">{themeMode === 'light' ? '深色主题' : '浅色主题'}</span>
+        </button>}
+      </div>
     </Sider>
     <Layout className="feature-main">
       <Header className="feature-header"><div><Button type="text" icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />} onClick={() => setCollapsed((value) => !value)} /><span className="header-module">{titleIcon}<b>{title}</b></span></div><div className="header-status"><Tag color={backend ? 'success' : 'error'}>{backend ? '后端在线' : '后端离线'}</Tag>{backend?.demo_mode && <Tag color="gold">DEMO</Tag>}<span>{new Date().toLocaleDateString('zh-CN')}</span></div></Header>

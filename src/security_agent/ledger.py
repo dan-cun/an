@@ -121,6 +121,21 @@ class LedgerStore:
             ).all()
             return [self._to_event(row) for row in rows]
 
+    def events_by_type(
+        self,
+        event_type: str,
+        *,
+        since: datetime | None = None,
+        limit: int = 100_000,
+    ) -> list[LedgerEvent]:
+        """Return durable events across runs for aggregate dashboards."""
+        with Session(self.engine) as session:
+            statement = select(EventRow).where(EventRow.event_type == event_type)
+            if since is not None:
+                statement = statement.where(EventRow.timestamp >= since)
+            rows = session.scalars(statement.order_by(EventRow.timestamp).limit(limit)).all()
+            return [self._to_event(row) for row in rows]
+
     def verify(self, run_id: str) -> bool:
         previous = ZERO_HASH
         for event in self.events(run_id, limit=1_000_000):

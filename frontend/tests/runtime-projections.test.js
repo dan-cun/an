@@ -1,8 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { deriveNetwork, projectStreams, projectThoughtTimeline } from '../src/app/runtimeModel.js'
+import { dedupeEvents, deriveNetwork, projectStreams, projectThoughtTimeline } from '../src/app/runtimeModel.js'
 import { localizeFinding, localizeModelOutput, localizePublicText, severityLabels } from '../src/app/localization.js'
+import { classifyRunStatus, isSuccessfulRun, routeFor, summarizeRunStatuses } from '../src/app/runStatus.js'
 
 const event = (sequence, event_type, payload) => ({
   event_id: `event-${sequence}`,
@@ -94,4 +95,32 @@ test('localizes historical report findings and public AI summaries', () => {
   assert.equal(severityLabels.CRITICAL, '严重')
   assert.match(localizePublicText('Bandit completed with 2 finding(s).'), /发现 2 个安全问题/)
   assert.match(localizeModelOutput(JSON.stringify({ steps: [{ tool_candidates: ['workspace_security_audit'] }] })), /1 个候选执行步骤/)
+})
+
+test('deduplicates live events by event_id and sequence while preserving order', () => {
+  const first = event(1, 'llm.stream.delta', { trace_id: 'trace', index: 1, delta: 'a' })
+  const duplicateId = { ...first, sequence: 2 }
+  const duplicateSequence = { ...event(3, 'llm.stream.delta', { trace_id: 'trace', index: 2, delta: 'b' }), sequence: 1 }
+  assert.deepEqual(dedupeEvents([first, duplicateId, duplicateSequence]).map((item) => item.event_id), ['event-1'])
+})
+
+test('requires verified Cairn objective evidence before counting penetration as completed', () => {
+  const base = { status: 'completed', module_route: 'penetration' }
+  assert.equal(isSuccessfulRun({ ...base, external_execution: { status: 'running', objective_reached: false } }), false)
+  assert.equal(classifyRunStatus({ ...base, external_execution: { status: 'timeout', objective_reached: false } }), 'timeout')
+  assert.equal(classifyRunStatus({ ...base, external_execution: { status: 'unavailable', objective_reached: false } }), 'unavailable')
+  assert.equal(isSuccessfulRun({ ...base, external_execution: { status: 'completed', objective_reached: true } }), true)
+})
+
+test('normalizes legacy routes and keeps overview status buckets mutually exclusive', () => {
+  assert.equal(routeFor({ module_route: 'audit', scenario: 'code_audit' }), 'code_audit')
+  assert.equal(routeFor({ module_route: 'audit', scenario: 'penetration_test' }), 'penetration')
+  assert.equal(routeFor({ module_route: 'reverse_triage' }), 'reverse')
+  assert.deepEqual(summarizeRunStatuses([
+    { status: 'completed', module_route: 'code_audit' },
+    { status: 'partial', module_route: 'code_audit' },
+    { status: 'failed', module_route: 'code_audit' },
+    { status: 'completed', module_route: 'penetration', external_execution: { status: 'timeout' } },
+    { status: 'completed', module_route: 'penetration', external_execution: { status: 'running' } },
+  ]), { completed: 1, partial: 1, failed: 1, timeout: 1, unavailable: 0, waiting_approval: 0, running: 1 })
 })

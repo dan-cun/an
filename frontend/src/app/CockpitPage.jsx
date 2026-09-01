@@ -26,14 +26,12 @@ export function CockpitPage() {
   const [runs, setRuns] = useState([])
   const [incident, setIncident] = useState({ running: true, pending_approvals: 2 })
   const [logs, setLogs] = useState([])
-  const [lastUpdated, setLastUpdated] = useState(null)
 
   const refresh = useCallback(async () => {
     const results = await Promise.allSettled([listRuns(), getIncidentStatus(), getIncidentLogs(20)])
     if (results[0].status === 'fulfilled') setRuns(results[0].value.runs || [])
     if (results[1].status === 'fulfilled') setIncident(results[1].value)
     if (results[2].status === 'fulfilled') setLogs(results[2].value.logs || [])
-    setLastUpdated(new Date())
   }, [])
 
   useEffect(() => {
@@ -48,11 +46,9 @@ export function CockpitPage() {
     if (!runs.length) Object.assign(next, { code_audit: 12, reverse_triage: 8, penetration_test: 6, incident_response: 9 })
     return next
   }, [runs])
-  const activeRuns = runs.filter((run) => !['completed', 'partial', 'failed', 'denied'].includes(run.status)).length
   const pending = (incident?.pending_approvals || 0) + runs.filter((run) => ['waiting_approval', 'failed', 'partial'].includes(run.status)).length
   const score = Math.min(100, 38 + pending * 4 + (incident?.running ? 0 : 8))
   const level = score > 65 ? '高' : score > 45 ? '中' : '低'
-  const task = incident?.running ? (activeRuns ? `正在编排 ${activeRuns} 个安全任务` : '正在执行环境巡检') : '监测模型处于待命状态'
   const go = (path) => window.__STANDALONE_COCKPIT__ ? window.location.assign(path) : navigate(path)
 
   return <div className="hero-shell cockpit-host">
@@ -66,7 +62,7 @@ export function CockpitPage() {
       </div>
       <div className="cockpit-grid">
         <aside className="cockpit-left"><section className="cockpit-card scene-card"><CardTitle kicker="SCENE DISTRIBUTION" title="四个方向的内容" icon="↗" /><div className="scene-list">{scenes.map(([key, label]) => <button className="scene-row" type="button" key={key} onClick={() => go('/workbench')}><span><i className={`dot ${key}`} />{label}</span><b>{counts[key]}</b><i className="bar"><em style={{ width: `${Math.min(100, counts[key] * 5)}%` }} /></i></button>)}</div><CardTitle kicker="7-DAY TREND" title="最近七日处理趋势" icon="↗" /><button id="cockpit-trend" className="trend-chart" type="button" onClick={() => go('/workbench')}>{trend.map((value, index) => <span title={`总数量：${value}`} key={trendLabels[index]}><i style={{ height: `${value * 2.1}px` }} /><small>{trendLabels[index]}</small></span>)}</button></section></aside>
-        <main className="cockpit-center"><div className="assistant-label"><span />智能运营助手 <small>{incident?.running ? '在线工作' : '待命'}</small></div><div className="task-dialog"><header><span />实时工作任务</header><div><b>{task}</b><small>{lastUpdated ? `更新于 ${lastUpdated.toLocaleTimeString('zh-CN', { hour12: false })}` : '等待连接'}</small></div><nav><i className="done">输入</i><u /><i className={activeRuns ? 'active' : ''}>分析</i><u /><i>验证</i><u /><i>报告</i></nav></div><p className="center-hint">点击左侧场景进入任务编排，点击上方告警进入应急响应</p></main>
+        <main className="cockpit-center"><div className="assistant-label"><span />智能运营助手 <small>{incident?.running ? '在线工作' : '待命'}</small></div></main>
         <aside className="cockpit-right"><section className="cockpit-card rank-card"><CardTitle kicker="THREAT INTELLIGENCE" title="攻击源 Top 5" icon="♨" /><div className="rank-list">{sources.map((item, index) => <RankRow item={item} index={index} key={item[0]} />)}</div><CardTitle kicker="TARGET ASSETS" title="被攻击资产 Top 5" icon="▣" /><div className="rank-list">{assets.map((item, index) => <RankRow item={item} index={index} key={item[0]} asset />)}</div></section><section className="cockpit-card capacity-card"><CardTitle kicker="ASSET & TOOL COVERAGE" title="当前电脑的高危资产" icon="⌘" /><div className="capacity-list"><div><b>3</b><small>高危资产</small></div><div><b>12</b><small>已接入工具</small></div><div><b>28</b><small>在线节点</small></div></div><div className="coverage"><label>资产基线覆盖 <span><i style={{ width: '86%' }} /><b>86%</b></span></label><label>日志接入覆盖 <span><i className="green" style={{ width: '72%' }} /><b>72%</b></span></label></div></section></aside>
       </div>
       <footer className="cockpit-summary"><span>↑</span><div><i>ONE-LINE ASSESSMENT</i><b>当前整体风险中等，主要风险来自 3 台公网服务器的异常登录行为。</b><p>系统已完成 {runs.length || 35} 个安全任务处理，{incident?.running ? '实时监测模型正在持续巡检。' : '监测模型处于待命状态。'}</p></div><button type="button" onClick={refresh}>刷新态势</button></footer>

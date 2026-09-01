@@ -205,6 +205,57 @@ const CY_STYLE = [
   { selector: 'edge:selected', style: { width: 3.5, color: '#e8fbff', 'line-color': '#62d9ff', 'target-arrow-color': '#62d9ff' } },
 ]
 
+// Cytoscape paints onto its own canvas, so normal CSS theme overrides cannot
+// recolor nodes and edge labels.  Keep the dark palette as the source of
+// truth, then replace only the surface/ink values for the light workspace.
+const LIGHT_NODE_PALETTE = {
+  origin: { border: '#8da0ae', background: '#f0f4f7' },
+  goal: { border: '#33a879', background: '#effaf5' },
+  intent: { border: '#5b84ff', background: '#eef3ff' },
+  worker: { border: '#2c9ac0', background: '#eaf7fb' },
+  fact: { border: '#d79222', background: '#fff8e9' },
+  vulnerability: { border: '#e15768', background: '#fff0f2' },
+  hypothesis: { border: '#8c63df', background: '#f4efff' },
+  hint: { border: '#b45bdb', background: '#fcf0ff' },
+  execute: { border: '#2c9ac0', background: '#eaf7fb' },
+}
+
+function cyStyleForTheme(light) {
+  if (!light) return CY_STYLE
+  return CY_STYLE.map((rule) => {
+    const style = { ...rule.style }
+    if (rule.selector === 'node') Object.assign(style, {
+      'background-color': '#ffffff',
+      'border-color': '#b9c9d5',
+      color: '#243649',
+    })
+    const typeMatch = rule.selector.match(/^node\.type-(.+)$/)
+    if (typeMatch && LIGHT_NODE_PALETTE[typeMatch[1]]) {
+      const palette = LIGHT_NODE_PALETTE[typeMatch[1]]
+      style['background-color'] = palette.background
+      style['border-color'] = palette.border
+    }
+    if (rule.selector === 'node.status-exploring') style['underlay-color'] = '#2d9dcc'
+    if (rule.selector === 'node:selected') {
+      style['border-color'] = '#2474e5'
+      style['underlay-color'] = '#3c9fda'
+    }
+    if (rule.selector === 'edge') Object.assign(style, {
+      'line-color': '#7d93a5',
+      'target-arrow-color': '#7d93a5',
+      color: '#5c7183',
+      'text-background-color': '#ffffff',
+      'text-background-opacity': 0.94,
+    })
+    if (rule.selector === 'edge:selected') {
+      style.color = '#2474e5'
+      style['line-color'] = '#2474e5'
+      style['target-arrow-color'] = '#2474e5'
+    }
+    return { ...rule, style }
+  })
+}
+
 export function BlackboardGraph({ run, events = [] }) {
   const containerRef = useRef(null)
   const cyRef = useRef(null)
@@ -213,6 +264,7 @@ export function BlackboardGraph({ run, events = [] }) {
   const [modalNode, setModalNode] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
+  const [lightTheme, setLightTheme] = useState(() => typeof document !== 'undefined' && document.body.classList.contains('light-theme'))
   const penetration = run?.module_route === 'penetration'
   const latestExplorationSequence = useMemo(
     () => [...events].reverse().find((event) => ['penetration.status', 'exploration.updated', 'exploration.completed'].includes(event.event_type))?.sequence || 0,
@@ -274,7 +326,7 @@ export function BlackboardGraph({ run, events = [] }) {
     const cy = cytoscape({
       container: containerRef.current,
       elements: [],
-      style: CY_STYLE,
+      style: cyStyleForTheme(lightTheme),
       minZoom: 0.15,
       maxZoom: 2.6,
       boxSelectionEnabled: true,
@@ -306,6 +358,19 @@ export function BlackboardGraph({ run, events = [] }) {
     setModalNode(null)
   }, [graph, remoteGraph?.project_id, run?.run_id, runLayout])
 
+  // Follow the global theme toggle without remounting the graph or losing the
+  // current pan/zoom position.
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined
+    const observer = new MutationObserver(() => setLightTheme(document.body.classList.contains('light-theme')))
+    observer.observe(document.body, { attributes: true, attributeFilter: ['class'] })
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => {
+    if (cyRef.current) cyRef.current.style(cyStyleForTheme(lightTheme))
+  }, [lightTheme])
+
   const zoom = (factor) => {
     const cy = cyRef.current
     if (!cy) return
@@ -317,6 +382,7 @@ export function BlackboardGraph({ run, events = [] }) {
 
   const currentMeta = modalNode ? (TYPE_META[modalNode.type] || TYPE_META.fact) : null
   const linked = !penetration || remoteGraph?.linked
+
   return <div className="blackboard-view penetration-blackboard">
     <header className="blackboard-header">
       <div><span>{penetration ? 'LIVE FACT - INTENT GRAPH' : 'WORKFLOW PROJECTION'}</span><b>{penetration ? 'AI 实时黑板探索模型' : '模块流程投影'}</b></div>

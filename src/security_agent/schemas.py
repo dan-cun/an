@@ -256,6 +256,45 @@ class ModelConnectionTest(BaseModel):
     fallback_model: str | None = Field(default=None, min_length=1, max_length=256)
 
 
+class MCPServerUpsertRequest(BaseModel):
+    """Presentation-only MCP server metadata; never registered at runtime."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    server_id: str | None = Field(default=None, min_length=2, max_length=100, pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    name: str = Field(min_length=1, max_length=160)
+    purpose: str = Field(min_length=1, max_length=500)
+    category: str = Field(default="security", min_length=1, max_length=120)
+    transport: Literal["streamable_http", "stdio", "sse", "display_only"] = "display_only"
+    url: str = Field(default="", max_length=2048)
+    icon: str = Field(default="safety", min_length=1, max_length=80)
+
+
+class MCPToolUpsertRequest(BaseModel):
+    """Presentation-only MCP tool metadata; never exposed to ToolBroker."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=2, max_length=100, pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    display_name: str = Field(min_length=1, max_length=160)
+    purpose: str = Field(min_length=1, max_length=500)
+    input: str = Field(min_length=1, max_length=1000)
+    returns: str = Field(min_length=1, max_length=1000)
+    invocation_timing: str = Field(min_length=1, max_length=500)
+    risk_level: Literal["R0", "R1", "R2", "R3"] = "R1"
+    icon: str = Field(default="tool", min_length=1, max_length=80)
+
+
+class ModelUsageQuotaUpdate(BaseModel):
+    """Token quotas used for dashboard reporting (zero means report-only)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    hourly_tokens: int = Field(default=0, ge=0, le=10_000_000_000)
+    daily_tokens: int = Field(default=0, ge=0, le=10_000_000_000)
+    monthly_tokens: int = Field(default=0, ge=0, le=100_000_000_000)
+
+
 class InputArtifact(BaseModel):
     artifact_id: str = Field(default_factory=lambda: str(uuid4()))
     original_name: str
@@ -433,7 +472,9 @@ class AgentState(BaseModel):
     run_id: str
     task: TaskRequest
     scenario: Scenario = Scenario.UNKNOWN
-    module_route: str = "audit"
+    # Canonical module identifier.  Older persisted runs may still contain
+    # ``audit``; API/UI projections normalize that legacy value to code_audit.
+    module_route: str = "code_audit"
     routing: dict[str, Any] = Field(default_factory=dict)
     status: RunStatus = RunStatus.PENDING
     workspace: str = ""
@@ -475,7 +516,7 @@ class RunSummary(BaseModel):
     name: str | None = None
     status: RunStatus
     scenario: Scenario
-    module_route: str = "audit"
+    module_route: str = "code_audit"
     routing: dict[str, Any] = Field(default_factory=dict)
     current_step: int
     total_steps: int

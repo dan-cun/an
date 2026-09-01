@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     qdrant_url: str = "http://qdrant:6333"
     qdrant_collection: str = "security_agent_knowledge"
     model_timeout_seconds: float = 45.0
+    model_hourly_token_quota: int = Field(default=0, ge=0)
+    model_daily_token_quota: int = Field(default=0, ge=0)
+    model_monthly_token_quota: int = Field(default=0, ge=0)
     api_host: str = "127.0.0.1"
     api_port: int = Field(default=8001, ge=1, le=65535)
     reverse_base_url: str = "http://127.0.0.1:8002"
@@ -107,6 +110,10 @@ class Settings(BaseSettings):
             value = data.get(field_name)
             if isinstance(value, str) and value.strip():
                 setattr(self, field_name, value.strip())
+        for field_name in ("model_hourly_token_quota", "model_daily_token_quota", "model_monthly_token_quota"):
+            value = data.get(field_name)
+            if isinstance(value, int) and value >= 0:
+                setattr(self, field_name, value)
         self.demo_mode = not bool(self.model_api_key)
 
     def save_runtime_model_config(self) -> None:
@@ -121,6 +128,9 @@ class Settings(BaseSettings):
                     "planner_model": self.planner_model,
                     "worker_model": self.worker_model,
                     "fallback_model": self.fallback_model,
+                    "model_hourly_token_quota": self.model_hourly_token_quota,
+                    "model_daily_token_quota": self.model_daily_token_quota,
+                    "model_monthly_token_quota": self.model_monthly_token_quota,
                 },
                 ensure_ascii=False,
                 indent=2,

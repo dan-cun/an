@@ -25,11 +25,23 @@ async function request(path, options = {}) {
 
 export const health = () => request('/health')
 export const getModelConfig = () => request('/api/v1/model-config')
-export const getModelUsage = () => request('/api/v1/model-usage')
+// Avoid browser/proxy caching so websocket-triggered refreshes show the latest
+// ledger counters and quota consumption immediately.
+export const getModelUsage = () => request(`/api/v1/model-usage?refresh=${Date.now()}`)
 export const testModelConfig = (payload) => request('/api/v1/model-config/test', { method: 'POST', body: JSON.stringify(payload) })
+export const getAvailableModels = (payload) => request('/api/v1/model-config/models', { method: 'POST', body: JSON.stringify(payload) })
+export const updateModelUsageQuota = (payload) => request('/api/v1/model-usage/quota', { method: 'PUT', body: JSON.stringify(payload) })
 export const updateModelConfig = (payload) => request('/api/v1/model-config', { method: 'PUT', body: JSON.stringify(payload) })
 export const getPromptCatalog = () => request('/api/v1/prompts')
+export const getPrompt = (promptKey) => request(`/api/v1/prompts/${encodeURIComponent(promptKey)}`)
 export const getMcpCatalog = () => request('/api/v1/mcp/catalog')
+export const getMcpServer = (serverId) => request(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}`)
+export const createMcpServer = (payload) => request('/api/v1/mcp/servers', { method: 'POST', body: JSON.stringify(payload) })
+export const updateMcpServer = (serverId, payload) => request(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}`, { method: 'PUT', body: JSON.stringify(payload) })
+export const deleteMcpServer = (serverId) => request(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}`, { method: 'DELETE' })
+export const createMcpTool = (serverId, payload) => request(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}/tools`, { method: 'POST', body: JSON.stringify(payload) })
+export const updateMcpTool = (serverId, toolName, payload) => request(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}/tools/${encodeURIComponent(toolName)}`, { method: 'PUT', body: JSON.stringify(payload) })
+export const deleteMcpTool = (serverId, toolName) => request(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}/tools/${encodeURIComponent(toolName)}`, { method: 'DELETE' })
 export const getIntegrationStatus = () => request('/api/v1/integration-status')
 
 function socketUrl(path, params = {}, location = window.location) {
@@ -43,9 +55,10 @@ function socketUrl(path, params = {}, location = window.location) {
 }
 
 export const modelUsageSocketUrl = (location = window.location) => socketUrl('/api/v1/model-usage/events', {}, location)
-export const listRuns = () => request('/api/v1/runs')
+export const listRuns = () => request(`/api/v1/runs?refresh=${Date.now()}`)
 export const getRun = (runId) => request(`/api/v1/runs/${encodeURIComponent(runId)}`)
 export const getReport = (runId) => request(`/api/v1/runs/${encodeURIComponent(runId)}/report`)
+export const refreshRunReport = (runId) => request(`/api/v1/runs/${encodeURIComponent(runId)}/report/refresh`, { method: 'POST' })
 export const getPenetrationGraph = (runId) =>
   request(`/api/v1/runs/${encodeURIComponent(runId)}/penetration-graph`)
 export const thoughtProcessUrl = (runId) =>

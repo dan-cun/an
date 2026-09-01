@@ -2,6 +2,11 @@ import React, { useEffect, useRef } from 'react'
 
 const WHITE = '242, 251, 255'
 const CYAN = '130, 223, 255'
+// The dark palette is intentionally bright, while light backgrounds need
+// darker blue-gray stars to retain contrast (the white dark-theme stars would
+// disappear against the light canvas).
+const LIGHT_WHITE = '62, 104, 140'
+const LIGHT_CYAN = '22, 133, 178'
 const MIN_ORBIT_SPEED = 0.08
 const MAX_ORBIT_SPEED = 0.24
 
@@ -52,9 +57,13 @@ export function ControlStarfield() {
 
     const context = canvas.getContext('2d')
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const palettes = {
+      dark: { white: WHITE, cyan: CYAN },
+      light: { white: LIGHT_WHITE, cyan: LIGHT_CYAN },
+    }
     const glowSprites = {
-      white: createGlowSprite(WHITE),
-      cyan: createGlowSprite(CYAN),
+      dark: { white: createGlowSprite(WHITE), cyan: createGlowSprite(CYAN) },
+      light: { white: createGlowSprite(LIGHT_WHITE), cyan: createGlowSprite(LIGHT_CYAN) },
     }
     const pointer = {
       active: false,
@@ -113,6 +122,8 @@ export function ControlStarfield() {
       pointer.x = lerp(pointer.x, pointer.active ? pointer.targetX : 0, 0.035)
       pointer.y = lerp(pointer.y, pointer.active ? pointer.targetY : 0, 0.035)
 
+      const paletteName = document.body.classList.contains('light-theme') ? 'light' : 'dark'
+      const palette = palettes[paletteName]
       stars.forEach((star) => {
         const angle = star.angle - elapsed * star.orbitSpeed
         const parallax = lerp(3, 16, star.depth)
@@ -126,11 +137,11 @@ export function ControlStarfield() {
         const brightness = lerp(0.32, 1, pulse)
         const coreSize = star.size * lerp(0.86, 1.3, brightness)
         const haloSize = coreSize * lerp(7.5, 11, star.depth)
-        const rgb = star.color === 'cyan' ? CYAN : WHITE
+        const rgb = star.color === 'cyan' ? palette.cyan : palette.white
 
         context.globalAlpha = brightness * lerp(0.48, 0.78, star.depth)
         context.drawImage(
-          glowSprites[star.color],
+          glowSprites[paletteName][star.color],
           x - haloSize / 2,
           y - haloSize / 2,
           haloSize,

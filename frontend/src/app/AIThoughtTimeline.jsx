@@ -8,7 +8,7 @@ const icons = { objective: <BulbOutlined />, thought: <RobotOutlined />, model: 
 
 function Usage({ usage }) {
   if (!usage) return null
-  return <span className="thought-usage">输入 {usage.prompt_tokens || 0} · 输出 {usage.completion_tokens || 0} · 缓存 {usage.cache_read_tokens || 0}</span>
+  return <span className="thought-usage">输入 {usage.prompt_tokens || 0} · 输出 {usage.completion_tokens || 0} · 总计 {usage.total_tokens || ((usage.prompt_tokens || 0) + (usage.completion_tokens || 0))} · 缓存 {usage.cache_read_tokens || 0}</span>
 }
 
 function Coverage({ coverage, required = false }) {

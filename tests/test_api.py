@@ -38,6 +38,15 @@ def test_health_and_task_flow(settings) -> None:
         assert refreshed.json()["fallback_model"] == "custom-fallback"
         assert refreshed.json()["demo_mode"] is False
         assert "test-secret-key" not in refreshed.text
+        prompts = client.get("/api/v1/prompts")
+        assert prompts.status_code == 200
+        assert prompts.json()["runtime_injected"] is False
+        if prompts.json()["prompts"]:
+            prompt_key = prompts.json()["prompts"][0]["key"]
+            prompt_detail = client.get(f"/api/v1/prompts/{prompt_key}")
+            assert prompt_detail.status_code == 200
+            assert prompt_detail.json()["runtime_injected"] is False
+            assert prompt_detail.json()["content"]
         invalid = client.put(
             "/api/v1/model-config",
             json={"base_url": "file:///tmp/model", "api_key": "test-secret-key"},
@@ -132,7 +141,9 @@ def test_health_and_task_flow(settings) -> None:
         run_id = task.json()["run_id"]
         runs = client.get("/api/v1/runs")
         assert runs.status_code == 200
-        assert any(item["run_id"] == run_id for item in runs.json()["runs"])
+        listed = next(item for item in runs.json()["runs"] if item["run_id"] == run_id)
+        assert {"status", "scenario", "module_route", "external_execution"}.issubset(listed)
+        assert listed["module_route"] == "code_audit"
         status = None
         for _ in range(100):
             response = client.get(f"/api/v1/runs/{run_id}")
@@ -142,6 +153,9 @@ def test_health_and_task_flow(settings) -> None:
             time.sleep(0.02)
         assert status == "completed"
         assert response.json()["name"] == "Uploaded source audit"
+        assert response.json()["scenario"] == "code_audit"
+        assert response.json()["module_route"] == "code_audit"
+        assert response.json()["external_execution"] == {}
         assert response.json()["budget"]["tool_calls_used"] >= 1
         assert response.json()["budget"]["model_calls_used"] == 0
         report = client.get(f"/api/v1/runs/{run_id}/report")
@@ -155,6 +169,15 @@ def test_health_and_task_flow(settings) -> None:
         assert usage.json()["run_count"] == 2
         assert usage.json()["token_usage_available"] is False
         assert usage.json()["total_tokens"] == 0
+        assert set(usage.json()["quota"]) == {"hourly", "daily", "monthly"}
+        assert set(usage.json()["series"]) == {"hourly", "daily", "monthly"}
+        quota = client.put(
+            "/api/v1/model-usage/quota",
+            json={"hourly_tokens": 1000, "daily_tokens": 5000, "monthly_tokens": 20000},
+        )
+        assert quota.status_code == 200
+        assert quota.json()["quota"] == {"hourly": 1000, "daily": 5000, "monthly": 20000}
+        assert client.get("/api/v1/model-usage").json()["quota"]["daily"] == 5000
         event_types = [item["event_type"] for item in ledger.json()["events"]]
         assert "agent.started" in event_types
         assert "agent.instruction" in event_types
@@ -167,3 +190,62 @@ def test_health_and_task_flow(settings) -> None:
         assert "可审计思考过程" in thoughts.text
         assert "编排指令" in thoughts.text
         assert "隐藏推理" in thoughts.text
+
+
+def test_mcp_catalog_crud_api_is_presentation_only(settings, tmp_path) -> None:
+    settings.prepare_directories()
+    app = create_app(settings)
+    app.state.mcp_catalog.storage_path = tmp_path / "mcp-catalog.json"
+    with TestClient(app) as client:
+        created_server = client.post(
+            "/api/v1/mcp/servers",
+            json={
+                "server_id": "demo-server",
+                "name": "Demo Server",
+                "purpose": "仅用于页面展示",
+                "category": "demo",
+                "transport": "display_only",
+                "url": "",
+                "icon": "safety",
+            },
+        )
+        assert created_server.status_code == 201
+        assert created_server.json()["server"]["enabled"] is False
+        created_tool = client.post(
+            "/api/v1/mcp/servers/demo-server/tools",
+            json={
+                "name": "demo_tool",
+                "display_name": "演示工具",
+                "purpose": "展示工具详情",
+                "input": "演示输入",
+                "returns": "演示输出",
+                "invocation_timing": "仅在详情页展示",
+                "risk_level": "R0",
+                "icon": "tool",
+            },
+        )
+        assert created_tool.status_code == 201
+        assert created_tool.json()["tool"]["runtime_exposed"] is False
+        updated_tool = client.put(
+            "/api/v1/mcp/servers/demo-server/tools/demo_tool",
+            json={
+                "name": "demo_tool",
+                "display_name": "已编辑的演示工具",
+                "purpose": "展示编辑后的详情",
+                "input": "编辑后的输入",
+                "returns": "编辑后的输出",
+                "invocation_timing": "仍然只用于展示",
+                "risk_level": "R1",
+                "icon": "experiment",
+            },
+        )
+        assert updated_tool.status_code == 200
+        assert updated_tool.json()["tool"]["runtime_exposed"] is False
+        catalog = client.get("/api/v1/mcp/catalog")
+        assert catalog.status_code == 200
+        assert catalog.json()["runtime_enabled"] is False
+        assert catalog.json()["invocation_enabled"] is False
+        assert {item["server_id"] for item in catalog.json()["servers"]} >= {"demo-server"}
+        assert client.delete("/api/v1/mcp/servers/demo-server/tools/demo_tool").status_code == 204
+        assert client.delete("/api/v1/mcp/servers/demo-server").status_code == 204
+        assert client.get("/api/v1/mcp/servers/demo-server").status_code == 404
